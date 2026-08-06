@@ -1,0 +1,47 @@
+{
+  "project_info": {
+    "project_number": "625827773182",
+    "project_id": "canteen-ordering-app-1cecf",
+    "storage_bucket": "canteen-ordering-app-1cecf.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:625827773182:android:f8806e93bbc1fdfa3083af",
+        "android_client_info": {
+          "package_name": "com.canteen_ordering_app"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "625827773182-nk5vfeqm9c4655eup859t03838sk3tlq.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.canteen_ordering_app",
+            "certificate_hash": "66dfae6cdc65af99295baf2fbaec27f4cd602431"
+          }
+        },
+        {
+          "client_id": "625827773182-asf45a8ie7qflqg5ulthnq27uem5nvhm.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDact3fyf6by1RzPTdqPY3xhpoHKkKDgJM"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "625827773182-asf45a8ie7qflqg5ulthnq27uem5nvhm.apps.googleusercontent.com",
+              "client_type": 3
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
