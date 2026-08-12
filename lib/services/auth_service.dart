@@ -1,12 +1,16 @@
+// lib/services/auth_service.dart
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:google_sign_in/google_sign_in.dart';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import '../models/user_model.dart';
 
 class AuthService {
   final FirebaseAuth _auth = FirebaseAuth.instance;
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
-  final GoogleSignIn _googleSignIn = GoogleSignIn();
+  
+  // Only initialize GoogleSignIn on mobile platforms (not web)
+  final GoogleSignIn? _googleSignIn = kIsWeb ? null : GoogleSignIn();
 
   // Stream of auth state changes
   Stream<User?> get authStateChanges => _auth.authStateChanges();
@@ -24,7 +28,6 @@ class AuthService {
       if (doc.exists) {
         return AppUser.fromFirestore(doc);
       }
-      // If user document doesn't exist, create one
       return await _createUserDocument(user);
     } catch (e) {
       print('Error getting user data: $e');
@@ -63,11 +66,9 @@ class AuthService {
       );
       final user = userCredential.user;
       if (user != null) {
-        // Update display name
         await user.updateDisplayName(username);
         await user.reload();
         
-        // Create user document in Firestore
         final appUser = AppUser(
           uid: user.uid,
           email: email,
@@ -92,12 +93,20 @@ class AuthService {
     }
   }
 
-  // Sign in with Google
+  // Sign in with Google - only works on mobile (not web)
   Future<AppUser?> signInWithGoogle() async {
+    // Don't allow Google Sign-In on web
+    if (kIsWeb) {
+      throw Exception('Google Sign-In is not supported on web. Please use email/password.');
+    }
+    
+    if (_googleSignIn == null) {
+      throw Exception('Google Sign-In is not available on this platform.');
+    }
+    
     try {
       final GoogleSignInAccount? googleUser = await _googleSignIn.signIn();
       if (googleUser == null) {
-        // User cancelled the sign-in
         return null;
       }
 
@@ -113,13 +122,10 @@ class AuthService {
       final user = userCredential.user;
       
       if (user != null) {
-        // Check if user document exists
         final doc = await _firestore.collection('users').doc(user.uid).get();
         if (!doc.exists) {
-          // Create new user document
           await _createUserDocument(user);
         } else {
-          // Update last login
           await _updateLastLogin(user.uid);
         }
         return await getCurrentUserData();
@@ -149,14 +155,16 @@ class AuthService {
   // Sign out
   Future<void> signOut() async {
     try {
-      // Update user status before signing out
       final user = _auth.currentUser;
       if (user != null) {
         await _firestore.collection('users').doc(user.uid).update({
           'isActive': false,
         });
       }
-      await _googleSignIn.signOut();
+      // Only sign out Google if not on web
+      if (!kIsWeb && _googleSignIn != null) {
+        await _googleSignIn.signOut();
+      }
       await _auth.signOut();
     } catch (e) {
       print('Sign out error: $e');
@@ -195,7 +203,6 @@ class AuthService {
     if (user == null) throw Exception('No user logged in');
 
     try {
-      // Update Firebase Auth
       if (displayName != null) {
         await user.updateDisplayName(displayName);
       }
@@ -203,7 +210,6 @@ class AuthService {
         await user.updatePhotoURL(photoURL);
       }
 
-      // Update Firestore
       final Map<String, dynamic> updates = {};
       if (username != null) updates['username'] = username;
       if (displayName != null) updates['displayName'] = displayName;
@@ -254,9 +260,7 @@ class AuthService {
     if (user == null) throw Exception('No user logged in');
 
     try {
-      // Delete Firestore data
       await _firestore.collection('users').doc(user.uid).delete();
-      // Delete Auth account
       await user.delete();
     } catch (e) {
       print('Error deleting account: $e');

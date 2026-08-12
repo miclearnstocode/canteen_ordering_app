@@ -1,3 +1,4 @@
+// lib/auth_gate.dart
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'services/auth_service.dart';
@@ -9,8 +10,10 @@ class AuthGate extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final authService = AuthService();
+    
     return StreamBuilder<User?>(
-      stream: AuthService().authStateChanges,
+      stream: authService.authStateChanges,
       builder: (context, snapshot) {
         if (snapshot.connectionState == ConnectionState.waiting) {
           return const Scaffold(
