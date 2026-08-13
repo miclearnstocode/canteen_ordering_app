@@ -1,4 +1,4 @@
-// lib/pages/home_dashboard.dart (Alternative version using GlobalKey)
+// lib/pages/home_dashboard.dart
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:firebase_auth/firebase_auth.dart';
@@ -17,8 +17,8 @@ class HomeDashboard extends StatefulWidget {
 class _HomeDashboardState extends State<HomeDashboard> {
   int _selectedIndex = 0;
   
-  // Create a GlobalKey to access the state from anywhere
-  static final GlobalKey<_HomeDashboardState> homeKey = GlobalKey();
+  // GlobalKey to access this state from anywhere
+  static final GlobalKey<_HomeDashboardState> globalKey = GlobalKey();
 
   // Method to change tab from outside
   void changeTab(int index) {
@@ -30,7 +30,7 @@ class _HomeDashboardState extends State<HomeDashboard> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      key: homeKey,
+      key: globalKey,
       body: IndexedStack(
         index: _selectedIndex,
         children: const [
@@ -84,7 +84,7 @@ class _HomeDashboardState extends State<HomeDashboard> {
   }
 }
 
-// Update the HomeContent to use the GlobalKey
+// Home Content - Using GlobalKey for navigation
 class HomeContent extends StatelessWidget {
   const HomeContent({super.key});
 
@@ -148,7 +148,8 @@ class HomeContent extends StatelessWidget {
                   label: 'Scan QR',
                   color: const Color(0xFFFF6B35),
                   onTap: () {
-                    _HomeDashboardState.homeKey.currentState?.changeTab(1);
+                    // Navigate to scan (tab 1)
+                    _HomeDashboardState.globalKey.currentState?.changeTab(1);
                   },
                 ),
               ),
@@ -174,8 +175,8 @@ class HomeContent extends StatelessWidget {
                   label: 'My Orders',
                   color: Colors.green,
                   onTap: () {
-                    // Navigate to my orders using GlobalKey
-                    _HomeDashboardState.homeKey.currentState?.changeTab(2);
+                    // Navigate to my orders (tab 2) - THIS WORKS!
+                    _HomeDashboardState.globalKey.currentState?.changeTab(2);
                   },
                 ),
               ),
@@ -186,7 +187,8 @@ class HomeContent extends StatelessWidget {
                   label: 'Rewards',
                   color: Colors.purple,
                   onTap: () {
-                    _HomeDashboardState.homeKey.currentState?.changeTab(3);
+                    // Navigate to rewards (tab 3)
+                    _HomeDashboardState.globalKey.currentState?.changeTab(3);
                   },
                 ),
               ),
@@ -235,7 +237,7 @@ class HomeContent extends StatelessWidget {
   }
 }
 
-// Quick Action Card (same as before)
+// Quick Action Card
 class _QuickActionCard extends StatelessWidget {
   final IconData icon;
   final String label;
@@ -281,7 +283,7 @@ class _QuickActionCard extends StatelessWidget {
   }
 }
 
-// Canteen Card (same as before)
+// Canteen Card
 class CanteenCard extends StatelessWidget {
   final String name;
   final String location;
