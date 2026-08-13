@@ -2,6 +2,7 @@
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import '../auth_gate.dart';
 
 class SplashScreen extends StatefulWidget {
   const SplashScreen({super.key});
@@ -22,21 +23,18 @@ class _SplashScreenState extends State<SplashScreen> {
     await Future.delayed(const Duration(seconds: 2));
     
     if (mounted) {
-      final user = FirebaseAuth.instance.currentUser;
-      if (user != null) {
-        // Navigate to Home
-        Navigator.pushReplacementNamed(context, '/home');
-      } else {
-        // Navigate to Login
-        Navigator.pushReplacementNamed(context, '/login');
-      }
+      // Navigate to AuthGate which will handle the routing
+      Navigator.pushReplacement(
+        context,
+        MaterialPageRoute(builder: (context) => const AuthGate()),
+      );
     }
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: const Color(0xFFFF6B35), // Orange theme
+      backgroundColor: const Color(0xFFFF6B35),
       body: Center(
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
@@ -63,7 +61,6 @@ class _SplashScreenState extends State<SplashScreen> {
               ),
             ),
             const SizedBox(height: 32),
-            // App Name
             Text(
               'CanteenQR',
               style: GoogleFonts.poppins(
@@ -84,7 +81,6 @@ class _SplashScreenState extends State<SplashScreen> {
               ),
             ),
             const SizedBox(height: 40),
-            // Loading indicator
             SizedBox(
               width: 40,
               height: 40,

@@ -3,7 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'firebase_options.dart';
-import 'pages/splash_screen.dart';
+import 'auth_gate.dart';
 import 'pages/login_page.dart';
 import 'pages/register_page.dart';
 import 'pages/home_dashboard.dart';
@@ -13,6 +13,9 @@ import 'pages/checkout_page.dart';
 import 'pages/order_success.dart';
 import 'pages/loyalty_page.dart';
 import 'pages/profile_page.dart';
+import 'pages/scan_qr_page.dart';
+import 'pages/my_orders_page.dart';
+import 'pages/canteen_info_page.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -42,7 +45,7 @@ class CanteenApp extends StatelessWidget {
           foregroundColor: Colors.black87,
         ),
       ),
-      home: const SplashScreen(),
+      home: const AuthGate(),
       routes: {
         '/login': (context) => const LoginPage(),
         '/register': (context) => const RegisterPage(),
@@ -53,6 +56,9 @@ class CanteenApp extends StatelessWidget {
         '/order-success': (context) => const OrderSuccessPage(),
         '/rewards': (context) => const LoyaltyPage(),
         '/profile': (context) => const ProfilePage(),
+        '/scan': (context) => const ScanQRPage(),
+        '/my-orders': (context) => const MyOrdersPage(),
+        '/canteen-info': (context) => const CanteenInfoPage(),
       },
     );
   }

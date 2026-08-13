@@ -48,7 +48,8 @@ class _RegisterPageState extends State<RegisterPage> {
             backgroundColor: Colors.green.shade400,
           ),
         );
-        // AuthGate will handle navigation automatically
+        // Navigate back to login
+        Navigator.pop(context);
       }
     } catch (e) {
       if (mounted) {

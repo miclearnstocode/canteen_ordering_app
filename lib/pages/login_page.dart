@@ -1,8 +1,10 @@
 // lib/pages/login_page.dart
 import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:google_fonts/google_fonts.dart';
 import '../services/auth_service.dart';
 import 'register_page.dart';
+import '../auth_gate.dart';
 
 class LoginPage extends StatefulWidget {
   const LoginPage({super.key});
@@ -31,11 +33,22 @@ class _LoginPageState extends State<LoginPage> {
 
     setState(() => _loading = true);
     try {
-      await _authService.signInWithEmail(
+      final user = await _authService.signInWithEmail(
         _emailController.text.trim(),
         _passwordController.text.trim(),
       );
+      
+      print('✅ Login successful! User: ${user?.displayName}');
+      
+      if (mounted) {
+        // Navigate to AuthGate which will handle the routing
+        Navigator.pushReplacement(
+          context,
+          MaterialPageRoute(builder: (context) => const AuthGate()),
+        );
+      }
     } catch (e) {
+      print('❌ Login error: $e');
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
@@ -259,7 +272,7 @@ class _LoginPageState extends State<LoginPage> {
               ),
               const SizedBox(height: 24),
               
-              // Register Link - Fixed
+              // Register Link
               Row(
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
