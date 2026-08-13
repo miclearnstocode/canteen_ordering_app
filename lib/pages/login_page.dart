@@ -259,38 +259,49 @@ class _LoginPageState extends State<LoginPage> {
               ),
               const SizedBox(height: 24),
               
-              // Register Link
+              // Register Link - Fixed
               Row(
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
-                  Text(
-                    "Don't have an account?",
-                    style: GoogleFonts.inter(
-                      color: Colors.grey[600],
+                  Flexible(
+                    child: Text(
+                      "Don't have an account?",
+                      style: GoogleFonts.inter(
+                        color: Colors.grey[600],
+                        fontSize: 14,
+                      ),
+                      overflow: TextOverflow.ellipsis,
                     ),
                   ),
-                  TextButton(
-                    onPressed: () {
-                      Navigator.push(
-                        context,
-                        MaterialPageRoute(
-                          builder: (context) => const RegisterPage(),
+                  const SizedBox(width: 4),
+                  Flexible(
+                    child: TextButton(
+                      onPressed: () {
+                        Navigator.push(
+                          context,
+                          MaterialPageRoute(
+                            builder: (context) => const RegisterPage(),
+                          ),
+                        );
+                      },
+                      style: TextButton.styleFrom(
+                        padding: EdgeInsets.zero,
+                        minimumSize: Size.zero,
+                        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                      ),
+                      child: Text(
+                        'Sign Up',
+                        style: GoogleFonts.inter(
+                          color: const Color(0xFFFF6B35),
+                          fontWeight: FontWeight.w600,
+                          fontSize: 14,
                         ),
-                      );
-                    },
-                    style: TextButton.styleFrom(
-                      padding: const EdgeInsets.symmetric(horizontal: 4),
-                    ),
-                    child: Text(
-                      'Sign Up',
-                      style: GoogleFonts.inter(
-                        color: const Color(0xFFFF6B35),
-                        fontWeight: FontWeight.w600,
                       ),
                     ),
                   ),
                 ],
               ),
+              const SizedBox(height: 20),
             ],
           ),
         ),

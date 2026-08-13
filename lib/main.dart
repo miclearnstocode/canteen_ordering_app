@@ -1,3 +1,4 @@
+// lib/main.dart
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:firebase_core/firebase_core.dart';
@@ -34,6 +35,12 @@ class CanteenApp extends StatelessWidget {
         colorSchemeSeed: const Color(0xFFFF6B35),
         scaffoldBackgroundColor: const Color(0xFFFAFAFA),
         fontFamily: GoogleFonts.inter().fontFamily,
+        appBarTheme: const AppBarTheme(
+          elevation: 0,
+          centerTitle: true,
+          backgroundColor: Colors.white,
+          foregroundColor: Colors.black87,
+        ),
       ),
       home: const SplashScreen(),
       routes: {
