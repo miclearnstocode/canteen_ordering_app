@@ -1,4 +1,5 @@
 // lib/pages/register_page.dart
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import '../services/auth_service.dart';
@@ -37,10 +38,28 @@ class _RegisterPageState extends State<RegisterPage> {
 
     setState(() => _loading = true);
     try {
+      // Check if username is already taken
+      final existingUser = await FirebaseFirestore.instance
+          .collection('users')
+          .where('username', isEqualTo: _fullNameController.text.trim())
+          .limit(1)
+          .get();
+      
+      if (existingUser.docs.isNotEmpty) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Username already taken. Please choose another.'),
+            backgroundColor: Colors.orange,
+          ),
+        );
+        setState(() => _loading = false);
+        return;
+      }
+
       final user = await _authService.registerWithEmail(
         _emailController.text.trim(),
         _passwordController.text.trim(),
-        _fullNameController.text.trim(),
+        _fullNameController.text.trim(), // This becomes the username
         _selectedRole,
       );
 

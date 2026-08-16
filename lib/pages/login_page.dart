@@ -15,14 +15,14 @@ class LoginPage extends StatefulWidget {
 class _LoginPageState extends State<LoginPage> {
   final _authService = AuthService();
   final _formKey = GlobalKey<FormState>();
-  final _userController = TextEditingController(); // Changed from _emailController
+  final _usernameController = TextEditingController();
   final _passwordController = TextEditingController();
   bool _loading = false;
   bool _obscurePassword = true;
 
   @override
   void dispose() {
-    _userController.dispose();
+    _usernameController.dispose();
     _passwordController.dispose();
     super.dispose();
   }
@@ -33,7 +33,7 @@ class _LoginPageState extends State<LoginPage> {
     setState(() => _loading = true);
     try {
       final user = await _authService.signInWithUser(
-        _userController.text.trim(),
+        _usernameController.text.trim(),
         _passwordController.text.trim(),
       );
       
@@ -126,7 +126,7 @@ class _LoginPageState extends State<LoginPage> {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
-                      'User',
+                      'Username',
                       style: GoogleFonts.inter(
                         fontSize: 14,
                         fontWeight: FontWeight.w600,
@@ -135,10 +135,10 @@ class _LoginPageState extends State<LoginPage> {
                     ),
                     const SizedBox(height: 8),
                     TextFormField(
-                      controller: _userController,
+                      controller: _usernameController,
                       keyboardType: TextInputType.text,
                       decoration: InputDecoration(
-                        hintText: 'Username',
+                        hintText: 'Enter your username',
                         hintStyle: GoogleFonts.inter(
                           color: Colors.grey[400],
                         ),
@@ -155,10 +155,10 @@ class _LoginPageState extends State<LoginPage> {
                       ),
                       validator: (value) {
                         if (value == null || value.isEmpty) {
-                          return 'Please enter your username or email';
+                          return 'Please enter your username';
                         }
                         if (value.length < 2) {
-                          return 'Please enter a valid username or email';
+                          return 'Username must be at least 2 characters';
                         }
                         return null;
                       },
@@ -178,7 +178,7 @@ class _LoginPageState extends State<LoginPage> {
                       controller: _passwordController,
                       obscureText: _obscurePassword,
                       decoration: InputDecoration(
-                        hintText: 'Password',
+                        hintText: 'Enter your password',
                         hintStyle: GoogleFonts.inter(
                           color: Colors.grey[400],
                         ),

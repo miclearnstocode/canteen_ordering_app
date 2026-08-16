@@ -193,65 +193,33 @@ class AuthService {
     }
   }
 
-  Future<AppUser?> signInWithUser(String userIdentifier, String password) async {
+  Future<AppUser?> signInWithUser(String username, String password) async {
     try {
-      print('🔐 Attempting login with: $userIdentifier');
+      print('🔐 Attempting login with username: $username');
       
-      // Check if the identifier is an email or username
-      final bool isEmail = userIdentifier.contains('@') && userIdentifier.contains('.');
+      // Query Firestore for user by username
+      final query = await _firestore
+          .collection('users')
+          .where('username', isEqualTo: username)
+          .limit(1)
+          .get();
       
-      String email;
-      
-      if (isEmail) {
-        email = userIdentifier;
-      } else {
-        print('🔍 Looking up username: $userIdentifier');
-        
-        try {
-          // Try to find user by username
-          final query = await _firestore
-              .collection('users')
-              .where('username', isEqualTo: userIdentifier)
-              .limit(1)
-              .get();
-          
-          if (query.docs.isEmpty) {
-            // Try to find by displayName as fallback
-            print('⚠️ Username not found, trying displayName...');
-            final queryByDisplayName = await _firestore
-                .collection('users')
-                .where('displayName', isEqualTo: userIdentifier)
-                .limit(1)
-                .get();
-            
-            if (queryByDisplayName.docs.isEmpty) {
-              print('❌ User not found: $userIdentifier');
-              throw Exception('User not found. Please check your username.');
-            }
-            
-            email = queryByDisplayName.docs.first.data()['email'] ?? '';
-          } else {
-            email = query.docs.first.data()['email'] ?? '';
-          }
-          
-          print('📧 Found email for username: $email');
-        } on FirebaseException catch (e) {
-          print('❌ Firestore error: ${e.code} - ${e.message}');
-          
-          // If permission denied, try to login with the identifier as email
-          if (userIdentifier.contains('@')) {
-            email = userIdentifier;
-          } else {
-            // For development, you can hardcode a known email
-            // This is a temporary workaround for testing
-            print('⚠️ Using fallback email for testing...');
-            // Remove this in production!
-            email = 'example123@gmail.com'; // Your test email
-          }
-        }
+      if (query.docs.isEmpty) {
+        print('❌ User not found: $username');
+        throw Exception('User not found. Please check your username.');
       }
       
-      // Sign in with the email
+      // Get user data
+      final data = query.docs.first.data();
+      final email = data['email'] ?? '';
+      
+      if (email.isEmpty) {
+        throw Exception('User email not found. Please contact support.');
+      }
+      
+      print('✅ User found: $username');
+      
+      // Sign in with Firebase Auth using email and password
       final userCredential = await _auth.signInWithEmailAndPassword(
         email: email,
         password: password,
@@ -260,17 +228,22 @@ class AuthService {
       final user = userCredential.user;
       if (user != null) {
         print('✅ User signed in: ${user.uid}');
-        await _updateLastLogin(user.uid);
+        // Update last login
+        await _firestore.collection('users').doc(user.uid).update({
+          'lastLoginAt': FieldValue.serverTimestamp(),
+          'isActive': true,
+        });
         final userData = await getCurrentUserData();
-        print('✅ User data fetched: ${userData?.displayName}');
         return userData;
       }
       return null;
     } on FirebaseAuthException catch (e) {
-      print('❌ Auth error: ${e.code} - ${e.message}');
-      throw _handleAuthException(e);
+      if (e.code == 'user-not-found' || e.code == 'wrong-password') {
+        throw Exception('Invalid username or password.');
+      }
+      throw Exception('Login failed: ${e.message}');
     } catch (e) {
-      print('❌ Unknown error: $e');
+      print('❌ Error: $e');
       rethrow;
     }
   }
