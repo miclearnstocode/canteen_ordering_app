@@ -15,32 +15,31 @@ class LoginPage extends StatefulWidget {
 class _LoginPageState extends State<LoginPage> {
   final _authService = AuthService();
   final _formKey = GlobalKey<FormState>();
-  final _emailController = TextEditingController();
+  final _userController = TextEditingController(); // Changed from _emailController
   final _passwordController = TextEditingController();
   bool _loading = false;
   bool _obscurePassword = true;
 
   @override
   void dispose() {
-    _emailController.dispose();
+    _userController.dispose();
     _passwordController.dispose();
     super.dispose();
   }
 
-  Future<void> _handleEmailLogin() async {
+  Future<void> _handleLogin() async {
     if (!_formKey.currentState!.validate()) return;
 
     setState(() => _loading = true);
     try {
-      final user = await _authService.signInWithEmail(
-        _emailController.text.trim(),
+      final user = await _authService.signInWithUser(
+        _userController.text.trim(),
         _passwordController.text.trim(),
       );
       
       print('✅ Login successful! User: ${user?.displayName}');
       
       if (mounted) {
-        // Navigate to AuthGate which will handle the routing
         Navigator.pushReplacement(
           context,
           MaterialPageRoute(builder: (context) => const AuthGate()),
@@ -127,7 +126,7 @@ class _LoginPageState extends State<LoginPage> {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
-                      'Email/Student ID',
+                      'User',
                       style: GoogleFonts.inter(
                         fontSize: 14,
                         fontWeight: FontWeight.w600,
@@ -136,15 +135,15 @@ class _LoginPageState extends State<LoginPage> {
                     ),
                     const SizedBox(height: 8),
                     TextFormField(
-                      controller: _emailController,
-                      keyboardType: TextInputType.emailAddress,
+                      controller: _userController,
+                      keyboardType: TextInputType.text,
                       decoration: InputDecoration(
-                        hintText: 'Enter your email or ID',
+                        hintText: 'Username',
                         hintStyle: GoogleFonts.inter(
                           color: Colors.grey[400],
                         ),
                         prefixIcon: const Icon(
-                          Icons.email_outlined,
+                          Icons.person_outline,
                           color: Colors.grey,
                         ),
                         border: OutlineInputBorder(
@@ -156,10 +155,10 @@ class _LoginPageState extends State<LoginPage> {
                       ),
                       validator: (value) {
                         if (value == null || value.isEmpty) {
-                          return 'Please enter your email';
+                          return 'Please enter your username or email';
                         }
-                        if (!value.contains('@') || !value.contains('.')) {
-                          return 'Please enter a valid email';
+                        if (value.length < 2) {
+                          return 'Please enter a valid username or email';
                         }
                         return null;
                       },
@@ -179,7 +178,7 @@ class _LoginPageState extends State<LoginPage> {
                       controller: _passwordController,
                       obscureText: _obscurePassword,
                       decoration: InputDecoration(
-                        hintText: 'Enter your password',
+                        hintText: 'Password',
                         hintStyle: GoogleFonts.inter(
                           color: Colors.grey[400],
                         ),
@@ -248,7 +247,7 @@ class _LoginPageState extends State<LoginPage> {
                       child: _loading
                           ? const Center(child: CircularProgressIndicator())
                           : ElevatedButton(
-                              onPressed: _handleEmailLogin,
+                              onPressed: _handleLogin,
                               style: ElevatedButton.styleFrom(
                                 backgroundColor: const Color(0xFFFF6B35),
                                 foregroundColor: Colors.white,

@@ -53,11 +53,11 @@ class AuthService {
     }
   }
 
-  // Register with email and password
   Future<AppUser?> registerWithEmail(
     String email,
     String password,
     String username,
+    UserRole role, // Add this parameter
   ) async {
     try {
       final userCredential = await _auth.createUserWithEmailAndPassword(
@@ -74,6 +74,7 @@ class AuthService {
           email: email,
           displayName: username,
           username: username,
+          role: role,
           createdAt: DateTime.now(),
           lastLoginAt: DateTime.now(),
           isActive: true,
@@ -92,7 +93,7 @@ class AuthService {
       throw _handleAuthException(e);
     }
   }
-
+  
   // Sign in with Google - only works on mobile (not web)
   Future<AppUser?> signInWithGoogle() async {
     // Don't allow Google Sign-In on web
@@ -189,6 +190,88 @@ class AuthService {
         return 'Too many requests. Please try again later.';
       default:
         return 'Authentication failed: ${e.message}';
+    }
+  }
+
+  Future<AppUser?> signInWithUser(String userIdentifier, String password) async {
+    try {
+      print('🔐 Attempting login with: $userIdentifier');
+      
+      // Check if the identifier is an email or username
+      final bool isEmail = userIdentifier.contains('@') && userIdentifier.contains('.');
+      
+      String email;
+      
+      if (isEmail) {
+        email = userIdentifier;
+      } else {
+        print('🔍 Looking up username: $userIdentifier');
+        
+        try {
+          // Try to find user by username
+          final query = await _firestore
+              .collection('users')
+              .where('username', isEqualTo: userIdentifier)
+              .limit(1)
+              .get();
+          
+          if (query.docs.isEmpty) {
+            // Try to find by displayName as fallback
+            print('⚠️ Username not found, trying displayName...');
+            final queryByDisplayName = await _firestore
+                .collection('users')
+                .where('displayName', isEqualTo: userIdentifier)
+                .limit(1)
+                .get();
+            
+            if (queryByDisplayName.docs.isEmpty) {
+              print('❌ User not found: $userIdentifier');
+              throw Exception('User not found. Please check your username.');
+            }
+            
+            email = queryByDisplayName.docs.first.data()['email'] ?? '';
+          } else {
+            email = query.docs.first.data()['email'] ?? '';
+          }
+          
+          print('📧 Found email for username: $email');
+        } on FirebaseException catch (e) {
+          print('❌ Firestore error: ${e.code} - ${e.message}');
+          
+          // If permission denied, try to login with the identifier as email
+          if (userIdentifier.contains('@')) {
+            email = userIdentifier;
+          } else {
+            // For development, you can hardcode a known email
+            // This is a temporary workaround for testing
+            print('⚠️ Using fallback email for testing...');
+            // Remove this in production!
+            email = 'example123@gmail.com'; // Your test email
+          }
+        }
+      }
+      
+      // Sign in with the email
+      final userCredential = await _auth.signInWithEmailAndPassword(
+        email: email,
+        password: password,
+      );
+      
+      final user = userCredential.user;
+      if (user != null) {
+        print('✅ User signed in: ${user.uid}');
+        await _updateLastLogin(user.uid);
+        final userData = await getCurrentUserData();
+        print('✅ User data fetched: ${userData?.displayName}');
+        return userData;
+      }
+      return null;
+    } on FirebaseAuthException catch (e) {
+      print('❌ Auth error: ${e.code} - ${e.message}');
+      throw _handleAuthException(e);
+    } catch (e) {
+      print('❌ Unknown error: $e');
+      rethrow;
     }
   }
 

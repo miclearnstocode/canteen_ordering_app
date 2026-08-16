@@ -1,4 +1,3 @@
-// lib/main.dart
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:firebase_core/firebase_core.dart';
@@ -16,6 +15,12 @@ import 'pages/profile_page.dart';
 import 'pages/scan_qr_page.dart';
 import 'pages/my_orders_page.dart';
 import 'pages/canteen_info_page.dart';
+// Admin imports
+import 'pages/admin/admin_dashboard.dart';
+import 'pages/admin/admin_canteen_setup.dart';
+import 'pages/admin/admin_menu_management.dart';
+import 'pages/admin/admin_qr_generator.dart';
+import 'pages/admin/admin_orders.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -59,6 +64,12 @@ class CanteenApp extends StatelessWidget {
         '/scan': (context) => const ScanQRPage(),
         '/my-orders': (context) => const MyOrdersPage(),
         '/canteen-info': (context) => const CanteenInfoPage(),
+        // Admin routes
+        '/admin': (context) => const AdminDashboard(),
+        '/admin/canteen-setup': (context) => const AdminCanteenSetup(),
+        '/admin/menu-management': (context) => const AdminMenuManagement(),
+        '/admin/qr-generator': (context) => const AdminQRGenerator(),
+        '/admin/orders': (context) => const AdminOrders(),
       },
     );
   }

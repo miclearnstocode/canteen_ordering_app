@@ -33,26 +33,28 @@ dependencies:
 
   # Firebase
   firebase_core: ^2.24.2
-  firebase_auth: ^4.17.8
+  firebase_auth: ^4.16.0
   cloud_firestore: ^4.14.0
+  firebase_storage: ^11.6.0
+  
+  # Google Sign In
   google_sign_in: ^6.1.5
   
   # UI
   google_fonts: ^6.1.0
+  qr_flutter: ^4.1.0
   
-  # Other dependencies
-  cupertino_icons: ^1.0.6
+  # Utilities
+  image_picker: ^1.0.4
+  share_plus: ^7.2.1
+  intl: ^0.18.1
+  image_gallery_saver: ^2.0.3
+  screenshot: ^3.0.0
 
 dev_dependencies:
   flutter_test:
     sdk: flutter
-
-  # The "flutter_lints" package below contains a set of recommended lints to
-  # encourage good coding practices. The lint set provided by the package is
-  # activated in the `analysis_options.yaml` file located at the root of your
-  # package. See that file for information about deactivating specific lint
-  # rules and activating additional ones.
-  flutter_lints: ^6.0.0
+  flutter_lints: ^3.0.0
 
 # For information on the generic Dart part of this file, see the
 # following page: https://dart.dev/tools/pub/pubspec
