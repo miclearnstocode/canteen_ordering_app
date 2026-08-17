@@ -1,15 +1,16 @@
 // lib/pages/admin/admin_qr_generator.dart
 import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
+import 'package:flutter/rendering.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:image_gallery_saver/image_gallery_saver.dart';
-import 'package:screenshot/screenshot.dart';
 import 'dart:typed_data';
-import 'dart:io';
-// ignore: deprecated_member_use
+import 'dart:ui' as ui;
+import 'dart:io' show Platform;
+// ignore: avoid_web_libraries_in_flutter, deprecated_member_use
 import 'dart:html' as html;
 
 class AdminQRGenerator extends StatefulWidget {
@@ -20,7 +21,7 @@ class AdminQRGenerator extends StatefulWidget {
 }
 
 class _AdminQRGeneratorState extends State<AdminQRGenerator> {
-  final ScreenshotController _screenshotController = ScreenshotController();
+  final GlobalKey _qrKey = GlobalKey();
   String _canteenId = 'main';
   String _canteenName = 'Main Canteen';
   bool _isLoading = true;
@@ -49,8 +50,6 @@ class _AdminQRGeneratorState extends State<AdminQRGenerator> {
           });
         }
       }
-    } catch (e) {
-      print('Error getting canteen data: $e');
     } finally {
       if (mounted) {
         setState(() => _isLoading = false);
@@ -58,27 +57,52 @@ class _AdminQRGeneratorState extends State<AdminQRGenerator> {
     }
   }
 
-  Future<void> _downloadQR() async {
+  Future<void> _captureAndDownloadQR() async {
     try {
-      // Capture the QR code widget as image
-      final Uint8List? image = await _screenshotController.capture();
-      
-      if (image == null) {
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text('Failed to capture QR code'),
-              backgroundColor: Colors.red,
+      // Show loading
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Row(
+              children: [
+                SizedBox(
+                  width: 20,
+                  height: 20,
+                  child: CircularProgressIndicator(
+                    strokeWidth: 2,
+                    color: Colors.white,
+                  ),
+                ),
+                SizedBox(width: 12),
+                Text('Generating QR Code...'),
+              ],
             ),
-          );
-        }
-        return;
+            backgroundColor: Color(0xFFFF6B35),
+            duration: Duration(seconds: 2),
+          ),
+        );
       }
 
-      // Save to gallery (Android/iOS) or download (web)
+      // Get the QR widget's render object
+      final RenderRepaintBoundary boundary = _qrKey.currentContext!
+          .findRenderObject() as RenderRepaintBoundary;
+      
+      // Capture the image
+      final ui.Image image = await boundary.toImage(pixelRatio: 3.0);
+      final ByteData? byteData = await image.toByteData(
+        format: ui.ImageByteFormat.png,
+      );
+      
+      if (byteData == null) {
+        throw Exception('Failed to generate image');
+      }
+      
+      final Uint8List pngBytes = byteData.buffer.asUint8List();
+
+      // Save or download based on platform
       if (Platform.isAndroid || Platform.isIOS) {
         final result = await ImageGallerySaver.saveImage(
-          image,
+          pngBytes,
           quality: 100,
           name: 'canteen_qr_${DateTime.now().millisecondsSinceEpoch}',
         );
@@ -92,27 +116,22 @@ class _AdminQRGeneratorState extends State<AdminQRGenerator> {
           );
         }
       } else if (kIsWeb) {
-        // For web, create a download link
+        // Web download
         try {
-          // Create a blob from the image data
-          final blob = html.Blob([image]);
+          final blob = html.Blob([pngBytes]);
           final url = html.Url.createObjectUrl(blob);
           
-          // Create an anchor element and trigger download
           final anchor = html.AnchorElement(href: url)
             ..setAttribute('download', 'canteen_qr_${DateTime.now().millisecondsSinceEpoch}.png')
             ..style.display = 'none';
           
-          // Add to body, click, and remove
           final body = html.document.body;
           if (body != null) {
             body.append(anchor);
             anchor.click();
-            // Use remove() instead of removeChild
             anchor.remove();
           }
           
-          // Revoke the URL to free memory
           html.Url.revokeObjectUrl(url);
           
           if (mounted) {
@@ -124,33 +143,16 @@ class _AdminQRGeneratorState extends State<AdminQRGenerator> {
             );
           }
         } catch (e) {
-          print('Web download error: $e');
-          if (mounted) {
-            ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(
-                content: Text('Error downloading: $e'),
-                backgroundColor: Colors.red,
-              ),
-            );
-          }
+          throw Exception('Web download failed: $e');
         }
       } else {
-        // Fallback for other platforms
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text('Download not supported on this platform'),
-              backgroundColor: Colors.orange,
-            ),
-          );
-        }
+        throw Exception('Download not supported on this platform');
       }
     } catch (e) {
-      print('Error downloading QR: $e');
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('Error downloading QR: $e'),
+            content: Text('❌ Error: $e'),
             backgroundColor: Colors.red,
           ),
         );
@@ -159,37 +161,10 @@ class _AdminQRGeneratorState extends State<AdminQRGenerator> {
   }
 
   Future<void> _shareQR() async {
-    try {
-      final Uint8List? image = await _screenshotController.capture();
-      
-      if (image == null) {
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text('Failed to capture QR code'),
-              backgroundColor: Colors.red,
-            ),
-          );
-        }
-        return;
-      }
-
-      // Share the QR code
-      await Share.share(
-        'Scan this QR code to order from $_canteenName!',
-        subject: 'Canteen QR Code',
-      );
-    } catch (e) {
-      print('Error sharing QR: $e');
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Error sharing: $e'),
-            backgroundColor: Colors.red,
-          ),
-        );
-      }
-    }
+    await Share.share(
+      'Scan this QR code to order from $_canteenName!\n\nCanteenQR - Scan.Order.Earn Rewards.',
+      subject: 'Canteen QR Code',
+    );
   }
 
   @override
@@ -200,6 +175,9 @@ class _AdminQRGeneratorState extends State<AdminQRGenerator> {
           'Generate QR Code',
           style: GoogleFonts.poppins(fontWeight: FontWeight.w600),
         ),
+        backgroundColor: Colors.white,
+        elevation: 0,
+        foregroundColor: Colors.black,
       ),
       body: _isLoading
           ? const Center(child: CircularProgressIndicator())
@@ -211,8 +189,8 @@ class _AdminQRGeneratorState extends State<AdminQRGenerator> {
                   const SizedBox(height: 20),
                   
                   // QR Code Preview
-                  Screenshot(
-                    controller: _screenshotController,
+                  RepaintBoundary(
+                    key: _qrKey,
                     child: Container(
                       padding: const EdgeInsets.all(32),
                       decoration: BoxDecoration(
@@ -227,12 +205,14 @@ class _AdminQRGeneratorState extends State<AdminQRGenerator> {
                         ],
                       ),
                       child: Column(
+                        mainAxisSize: MainAxisSize.min,
                         children: [
                           Text(
                             'Scan to Order',
                             style: GoogleFonts.poppins(
                               fontSize: 18,
                               fontWeight: FontWeight.w600,
+                              color: Colors.black87,
                             ),
                           ),
                           const SizedBox(height: 16),
@@ -241,6 +221,9 @@ class _AdminQRGeneratorState extends State<AdminQRGenerator> {
                             decoration: BoxDecoration(
                               color: Colors.white,
                               borderRadius: BorderRadius.circular(16),
+                              border: Border.all(
+                                color: Colors.grey.shade200,
+                              ),
                             ),
                             child: QrImageView(
                               data: 'canteenqr://$_canteenId',
@@ -252,10 +235,11 @@ class _AdminQRGeneratorState extends State<AdminQRGenerator> {
                           ),
                           const SizedBox(height: 16),
                           Text(
-                            '$_canteenName',
+                            _canteenName,
                             style: GoogleFonts.inter(
                               fontWeight: FontWeight.w600,
                               fontSize: 16,
+                              color: Colors.black87,
                             ),
                           ),
                           Text(
@@ -299,12 +283,12 @@ class _AdminQRGeneratorState extends State<AdminQRGenerator> {
                   
                   const SizedBox(height: 24),
                   
-                  // Action Buttons
+                  // Download Buttons
                   Row(
                     children: [
                       Expanded(
                         child: ElevatedButton.icon(
-                          onPressed: _downloadQR,
+                          onPressed: _captureAndDownloadQR,
                           style: ElevatedButton.styleFrom(
                             backgroundColor: const Color(0xFFFF6B35),
                             foregroundColor: Colors.white,

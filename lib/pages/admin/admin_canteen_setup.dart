@@ -43,6 +43,7 @@ class _AdminCanteenSetupState extends State<AdminCanteenSetup> {
         'updatedAt': FieldValue.serverTimestamp(),
       });
 
+      // ignore: use_build_context_synchronously
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
           content: Text('✅ Canteen data saved successfully!'),
@@ -50,6 +51,7 @@ class _AdminCanteenSetupState extends State<AdminCanteenSetup> {
         ),
       );
     } catch (e) {
+      // ignore: use_build_context_synchronously
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text('❌ Error: $e'),
@@ -216,7 +218,7 @@ class _AdminCanteenSetupState extends State<AdminCanteenSetup> {
                           _isOpen = value;
                         });
                       },
-                      activeColor: const Color(0xFFFF6B35),
+                      activeThumbColor: const Color(0xFFFF6B35),
                     ),
                     Text(
                       _isOpen ? 'Open' : 'Closed',

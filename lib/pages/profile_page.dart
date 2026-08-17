@@ -92,7 +92,7 @@ class ProfilePage extends StatelessWidget {
             const SizedBox(height: 24),
             
             // Stats
-            Row(
+            const Row(
               children: [
                 Expanded(
                   child: _StatCard(
@@ -101,7 +101,7 @@ class ProfilePage extends StatelessWidget {
                     icon: Icons.star,
                   ),
                 ),
-                const SizedBox(width: 12),
+                SizedBox(width: 12),
                 Expanded(
                   child: _StatCard(
                     label: 'Orders',
@@ -109,7 +109,7 @@ class ProfilePage extends StatelessWidget {
                     icon: Icons.receipt,
                   ),
                 ),
-                const SizedBox(width: 12),
+                SizedBox(width: 12),
                 Expanded(
                   child: _StatCard(
                     label: 'Rewards',

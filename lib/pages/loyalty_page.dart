@@ -25,10 +25,10 @@ class LoyaltyPage extends StatelessWidget {
             Container(
               padding: const EdgeInsets.all(24),
               decoration: BoxDecoration(
-                gradient: LinearGradient(
+                gradient: const LinearGradient(
                   colors: [
-                    const Color(0xFFFF6B35),
-                    const Color(0xFFFF8A65),
+                    Color(0xFFFF6B35),
+                    Color(0xFFFF8A65),
                   ],
                 ),
                 borderRadius: BorderRadius.circular(20),
@@ -143,17 +143,17 @@ class LoyaltyPage extends StatelessWidget {
             ),
             const SizedBox(height: 12),
             
-            _RewardCard(
+            const _RewardCard(
               title: 'Free Iced Tea',
               points: 500,
               description: 'Get a free iced tea with any meal',
             ),
-            _RewardCard(
+            const _RewardCard(
               title: '₱20 Off Voucher',
               points: 1000,
               description: 'Get ₱20 off your next order',
             ),
-            _RewardCard(
+            const _RewardCard(
               title: 'Free Upgrade',
               points: 1500,
               description: 'Upgrade your meal to large size',
@@ -200,9 +200,9 @@ class _RewardCard extends StatelessWidget {
               color: const Color(0xFFFF6B35).withValues(alpha: 0.1),
               shape: BoxShape.circle,
             ),
-            child: Icon(
+            child: const Icon(
               Icons.star,
-              color: const Color(0xFFFF6B35),
+              color: Color(0xFFFF6B35),
             ),
           ),
           const SizedBox(width: 16),

@@ -46,6 +46,7 @@ class _RegisterPageState extends State<RegisterPage> {
           .get();
       
       if (existingUser.docs.isNotEmpty) {
+        // ignore: use_build_context_synchronously
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
             content: Text('Username already taken. Please choose another.'),

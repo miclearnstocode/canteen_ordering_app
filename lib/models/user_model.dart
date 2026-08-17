@@ -59,8 +59,6 @@ class AppUser {
     final data = doc.data() as Map<String, dynamic>;
     
     // Debug: Print the role from Firestore
-    print('📋 Firestore data: $data');
-    print('📋 Role from Firestore: ${data['role']}');
     
     // Parse role - handle both String and enum values
     UserRole role;

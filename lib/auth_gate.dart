@@ -30,16 +30,10 @@ class _AuthGateState extends State<AuthGate> {
       setState(() => _isLoading = true);
       
       if (user != null) {
-        print('👤 User authenticated: ${user.uid}');
         final appUser = await _authService.getCurrentUserData();
-        print('📊 User data: ${appUser?.toMap()}');
-        print('👑 User role: ${appUser?.role}');
-        print('👑 Is Admin: ${appUser?.isAdmin}');
-        print('👑 Is Active: ${appUser?.isActive}');
         
         // If user is inactive, update to active
         if (appUser != null && appUser.isActive == false) {
-          print('🔄 User was inactive, updating to active...');
           await FirebaseFirestore.instance
               .collection('users')
               .doc(user.uid)
@@ -59,7 +53,6 @@ class _AuthGateState extends State<AuthGate> {
           _isLoading = false;
         });
       } else {
-        print('👤 No user authenticated');
         setState(() {
           _currentUser = null;
           _isLoading = false;
@@ -81,13 +74,10 @@ class _AuthGateState extends State<AuthGate> {
     }
 
     if (_currentUser != null) {
-      print('🔍 Routing user with role: ${_currentUser!.role}');
       // Route based on role
       if (_currentUser!.isAdmin) {
-        print('🏢 Navigating to Admin Dashboard');
         return const AdminDashboard();
       } else {
-        print('🏠 Navigating to User Home Dashboard');
         return const HomeDashboard();
       }
     }

@@ -341,7 +341,7 @@ class _AdminMenuManagementState extends State<AdminMenuManagement> {
                       children: [
                         Expanded(
                           child: DropdownButtonFormField<MenuCategory>(
-                            value: _selectedCategory,
+                            initialValue: _selectedCategory,
                             decoration: InputDecoration(
                               labelText: 'Category',
                               border: OutlineInputBorder(

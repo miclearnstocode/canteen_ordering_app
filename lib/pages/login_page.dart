@@ -15,14 +15,14 @@ class LoginPage extends StatefulWidget {
 class _LoginPageState extends State<LoginPage> {
   final _authService = AuthService();
   final _formKey = GlobalKey<FormState>();
-  final _usernameController = TextEditingController();
+  final _userController = TextEditingController();
   final _passwordController = TextEditingController();
   bool _loading = false;
   bool _obscurePassword = true;
 
   @override
   void dispose() {
-    _usernameController.dispose();
+    _userController.dispose();
     _passwordController.dispose();
     super.dispose();
   }
@@ -32,12 +32,11 @@ class _LoginPageState extends State<LoginPage> {
 
     setState(() => _loading = true);
     try {
-      final user = await _authService.signInWithUser(
-        _usernameController.text.trim(),
+      await _authService.signInWithUser(
+        _userController.text.trim(),
         _passwordController.text.trim(),
       );
       
-      print('✅ Login successful! User: ${user?.displayName}');
       
       if (mounted) {
         Navigator.pushReplacement(
@@ -46,11 +45,28 @@ class _LoginPageState extends State<LoginPage> {
         );
       }
     } catch (e) {
-      print('❌ Login error: $e');
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text('Login failed: $e'),
+            backgroundColor: Colors.red.shade400,
+          ),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _loading = false);
+    }
+  }
+
+  Future<void> _handleGoogleSignIn() async {
+    setState(() => _loading = true);
+    try {
+      await _authService.signInWithGoogle();
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Google sign-in failed: $e'),
             backgroundColor: Colors.red.shade400,
           ),
         );
@@ -126,7 +142,7 @@ class _LoginPageState extends State<LoginPage> {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
-                      'Username',
+                      'Username or Email',
                       style: GoogleFonts.inter(
                         fontSize: 14,
                         fontWeight: FontWeight.w600,
@@ -135,10 +151,10 @@ class _LoginPageState extends State<LoginPage> {
                     ),
                     const SizedBox(height: 8),
                     TextFormField(
-                      controller: _usernameController,
+                      controller: _userController,
                       keyboardType: TextInputType.text,
                       decoration: InputDecoration(
-                        hintText: 'Enter your username',
+                        hintText: 'Enter your username or email',
                         hintStyle: GoogleFonts.inter(
                           color: Colors.grey[400],
                         ),
@@ -155,10 +171,10 @@ class _LoginPageState extends State<LoginPage> {
                       ),
                       validator: (value) {
                         if (value == null || value.isEmpty) {
-                          return 'Please enter your username';
+                          return 'Please enter your username or email';
                         }
                         if (value.length < 2) {
-                          return 'Username must be at least 2 characters';
+                          return 'Please enter a valid username or email';
                         }
                         return null;
                       },
@@ -268,6 +284,53 @@ class _LoginPageState extends State<LoginPage> {
                   ],
                 ),
               ),
+              
+              const SizedBox(height: 20),
+              
+              // OR Divider
+              Row(
+                children: [
+                  Expanded(child: Divider(color: Colors.grey.shade300)),
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 16),
+                    child: Text(
+                      'OR',
+                      style: GoogleFonts.inter(
+                        color: Colors.grey[500],
+                        fontWeight: FontWeight.w500,
+                      ),
+                    ),
+                  ),
+                  Expanded(child: Divider(color: Colors.grey.shade300)),
+                ],
+              ),
+              const SizedBox(height: 20),
+              
+              // Google Sign In
+              OutlinedButton.icon(
+                onPressed: _loading ? null : _handleGoogleSignIn,
+                icon: const Icon(
+                  Icons.g_mobiledata,
+                  size: 24,
+                  color: Colors.black54,
+                ),
+                label: Text(
+                  'Continue with Google',
+                  style: GoogleFonts.inter(
+                    fontWeight: FontWeight.w600,
+                    color: Colors.black87,
+                  ),
+                ),
+                style: OutlinedButton.styleFrom(
+                  backgroundColor: Colors.white,
+                  side: BorderSide(color: Colors.grey.shade300),
+                  padding: const EdgeInsets.symmetric(vertical: 16),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(14),
+                  ),
+                ),
+              ),
+              
               const SizedBox(height: 24),
               
               // Register Link

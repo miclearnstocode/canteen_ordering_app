@@ -53,19 +53,19 @@ class _CheckoutPageState extends State<CheckoutPage> {
               ),
               child: Column(
                 children: [
-                  _CheckoutItem(
+                  const _CheckoutItem(
                     name: 'Chicken Meal',
                     price: 85.00,
                     quantity: 1,
                   ),
                   const Divider(),
-                  _CheckoutItem(
+                  const _CheckoutItem(
                     name: 'Iced Tea',
                     price: 35.00,
                     quantity: 2,
                   ),
                   const Divider(),
-                  _CheckoutItem(
+                  const _CheckoutItem(
                     name: 'Burger',
                     price: 75.00,
                     quantity: 1,

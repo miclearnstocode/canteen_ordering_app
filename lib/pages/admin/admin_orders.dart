@@ -180,7 +180,7 @@ class _OrderCard extends StatelessWidget {
                   ],
                 ),
               );
-            }).toList(),
+            }),
             const Divider(),
             Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,

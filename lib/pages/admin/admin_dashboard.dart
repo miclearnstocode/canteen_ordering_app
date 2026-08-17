@@ -128,7 +128,7 @@ class AdminHomeContent extends StatelessWidget {
           const SizedBox(height: 24),
           
           // Stats
-          Row(
+          const Row(
             children: [
               Expanded(
                 child: _AdminStatCard(
@@ -138,7 +138,7 @@ class AdminHomeContent extends StatelessWidget {
                   color: Colors.blue,
                 ),
               ),
-              const SizedBox(width: 12),
+              SizedBox(width: 12),
               Expanded(
                 child: _AdminStatCard(
                   label: 'Menu Items',
@@ -150,7 +150,7 @@ class AdminHomeContent extends StatelessWidget {
             ],
           ),
           const SizedBox(height: 12),
-          Row(
+          const Row(
             children: [
               Expanded(
                 child: _AdminStatCard(
@@ -160,7 +160,7 @@ class AdminHomeContent extends StatelessWidget {
                   color: Colors.orange,
                 ),
               ),
-              const SizedBox(width: 12),
+              SizedBox(width: 12),
               Expanded(
                 child: _AdminStatCard(
                   label: 'Active Users',

@@ -30,12 +30,85 @@ class AuthService {
       }
       return await _createUserDocument(user);
     } catch (e) {
-      print('Error getting user data: $e');
       return null;
     }
   }
 
-  // Sign in with email and password
+  // Sign in with username OR email
+  Future<AppUser?> signInWithUser(String userIdentifier, String password) async {
+    try {
+      
+      // Check if the identifier is an email or username
+      final bool isEmail = userIdentifier.contains('@') && userIdentifier.contains('.');
+      
+      String email;
+      
+      if (isEmail) {
+        // It's an email, use it directly
+        email = userIdentifier;
+      } else {
+        // It's a username, look up the email
+        
+        // Query Firestore for user by username
+        final query = await _firestore
+            .collection('users')
+            .where('username', isEqualTo: userIdentifier)
+            .limit(1)
+            .get();
+        
+        if (query.docs.isEmpty) {
+          // Try case-insensitive search
+          final allUsers = await _firestore.collection('users').get();
+          String? foundEmail;
+          
+          for (var doc in allUsers.docs) {
+            final data = doc.data();
+            final user = data['username'] ?? '';
+            if (user.toLowerCase() == userIdentifier.toLowerCase()) {
+              foundEmail = data['email'];
+              break;
+            }
+          }
+          
+          if (foundEmail == null) {
+            throw Exception('User not found. Please check your username or email.');
+          }
+          
+          email = foundEmail;
+        } else {
+          final data = query.docs.first.data();
+          email = data['email'] ?? '';
+        }
+      }
+      
+      if (email.isEmpty) {
+        throw Exception('User email not found. Please contact support.');
+      }
+      
+      // Sign in with Firebase Auth using email and password
+      final userCredential = await _auth.signInWithEmailAndPassword(
+        email: email,
+        password: password,
+      );
+      
+      final user = userCredential.user;
+      if (user != null) {
+        await _updateLastLogin(user.uid);
+        final userData = await getCurrentUserData();
+        return userData;
+      }
+      return null;
+    } on FirebaseAuthException catch (e) {
+      if (e.code == 'user-not-found' || e.code == 'wrong-password') {
+        throw Exception('Invalid username/email or password.');
+      }
+      throw Exception('Login failed: ${e.message}');
+    } catch (e) {
+      rethrow;
+    }
+  }
+
+  // Sign in with email and password (kept for compatibility)
   Future<AppUser?> signInWithEmail(String email, String password) async {
     try {
       final userCredential = await _auth.signInWithEmailAndPassword(
@@ -53,13 +126,25 @@ class AuthService {
     }
   }
 
+  // Register with email and password
   Future<AppUser?> registerWithEmail(
     String email,
     String password,
     String username,
-    UserRole role, // Add this parameter
+    UserRole role,
   ) async {
     try {
+      // Check if username is already taken
+      final existingUser = await _firestore
+          .collection('users')
+          .where('username', isEqualTo: username)
+          .limit(1)
+          .get();
+      
+      if (existingUser.docs.isNotEmpty) {
+        throw Exception('Username already taken. Please choose another.');
+      }
+
       final userCredential = await _auth.createUserWithEmailAndPassword(
         email: email,
         password: password,
@@ -93,20 +178,26 @@ class AuthService {
       throw _handleAuthException(e);
     }
   }
-  
-  // Sign in with Google - only works on mobile (not web)
+
+  // Sign in with Google - works on mobile and web with proper setup
   Future<AppUser?> signInWithGoogle() async {
-    // Don't allow Google Sign-In on web
-    if (kIsWeb) {
-      throw Exception('Google Sign-In is not supported on web. Please use email/password.');
-    }
-    
-    if (_googleSignIn == null) {
+    // Check if Google Sign-In is available
+    if (_googleSignIn == null && !kIsWeb) {
       throw Exception('Google Sign-In is not available on this platform.');
     }
     
     try {
-      final GoogleSignInAccount? googleUser = await _googleSignIn.signIn();
+      final GoogleSignInAccount? googleUser;
+      
+      if (kIsWeb) {
+        // Web Google Sign-In
+        final GoogleSignIn googleSignIn = GoogleSignIn();
+        googleUser = await googleSignIn.signIn();
+      } else {
+        // Mobile Google Sign-In
+        googleUser = await _googleSignIn!.signIn();
+      }
+      
       if (googleUser == null) {
         return null;
       }
@@ -133,14 +224,28 @@ class AuthService {
       }
       return null;
     } catch (e) {
-      print('Google sign-in error: $e');
       rethrow;
     }
   }
 
   // Create user document
   Future<AppUser> _createUserDocument(User user) async {
-    final appUser = AppUser.fromFirebaseUser(user);
+    final username = user.displayName ?? user.email?.split('@').first ?? 'User';
+    final appUser = AppUser(
+      uid: user.uid,
+      email: user.email ?? '',
+      displayName: username,
+      username: username,
+      role: UserRole.user,
+      createdAt: DateTime.now(),
+      lastLoginAt: DateTime.now(),
+      isActive: true,
+      points: 0,
+      preferences: {
+        'notifications': true,
+        'theme': 'light',
+      },
+    );
     await _firestore.collection('users').doc(user.uid).set(appUser.toMap());
     return appUser;
   }
@@ -162,13 +267,12 @@ class AuthService {
           'isActive': false,
         });
       }
-      // Only sign out Google if not on web
+      // Only sign out Google if not on web - FIXED: removed unnecessary '!'
       if (!kIsWeb && _googleSignIn != null) {
-        await _googleSignIn.signOut();
+        await _googleSignIn.signOut(); // No '!' needed here
       }
       await _auth.signOut();
     } catch (e) {
-      print('Sign out error: $e');
       rethrow;
     }
   }
@@ -190,61 +294,6 @@ class AuthService {
         return 'Too many requests. Please try again later.';
       default:
         return 'Authentication failed: ${e.message}';
-    }
-  }
-
-  Future<AppUser?> signInWithUser(String username, String password) async {
-    try {
-      print('🔐 Attempting login with username: $username');
-      
-      // Query Firestore for user by username
-      final query = await _firestore
-          .collection('users')
-          .where('username', isEqualTo: username)
-          .limit(1)
-          .get();
-      
-      if (query.docs.isEmpty) {
-        print('❌ User not found: $username');
-        throw Exception('User not found. Please check your username.');
-      }
-      
-      // Get user data
-      final data = query.docs.first.data();
-      final email = data['email'] ?? '';
-      
-      if (email.isEmpty) {
-        throw Exception('User email not found. Please contact support.');
-      }
-      
-      print('✅ User found: $username');
-      
-      // Sign in with Firebase Auth using email and password
-      final userCredential = await _auth.signInWithEmailAndPassword(
-        email: email,
-        password: password,
-      );
-      
-      final user = userCredential.user;
-      if (user != null) {
-        print('✅ User signed in: ${user.uid}');
-        // Update last login
-        await _firestore.collection('users').doc(user.uid).update({
-          'lastLoginAt': FieldValue.serverTimestamp(),
-          'isActive': true,
-        });
-        final userData = await getCurrentUserData();
-        return userData;
-      }
-      return null;
-    } on FirebaseAuthException catch (e) {
-      if (e.code == 'user-not-found' || e.code == 'wrong-password') {
-        throw Exception('Invalid username or password.');
-      }
-      throw Exception('Login failed: ${e.message}');
-    } catch (e) {
-      print('❌ Error: $e');
-      rethrow;
     }
   }
 
@@ -276,7 +325,6 @@ class AuthService {
         await _firestore.collection('users').doc(user.uid).update(updates);
       }
     } catch (e) {
-      print('Error updating profile: $e');
       rethrow;
     }
   }
@@ -290,7 +338,6 @@ class AuthService {
       }
       return null;
     } catch (e) {
-      print('Error getting user: $e');
       return null;
     }
   }
@@ -305,7 +352,6 @@ class AuthService {
           .get();
       return query.docs.isEmpty;
     } catch (e) {
-      print('Error checking username: $e');
       return false;
     }
   }
@@ -319,7 +365,6 @@ class AuthService {
       await _firestore.collection('users').doc(user.uid).delete();
       await user.delete();
     } catch (e) {
-      print('Error deleting account: $e');
       rethrow;
     }
   }
