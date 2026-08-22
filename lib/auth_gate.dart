@@ -3,7 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'services/auth_service.dart';
 import 'pages/login_page.dart';
-import 'pages/home_dashboard.dart';
+import 'pages/home_page.dart';
 import 'pages/admin/admin_dashboard.dart';
 import 'models/user_model.dart';
 
@@ -67,7 +67,7 @@ class _AuthGateState extends State<AuthGate> {
       return const Scaffold(
         body: Center(
           child: CircularProgressIndicator(
-            color: Color(0xFFFF6B35),
+            color: Color(0xFF2E7D32),
           ),
         ),
       );
@@ -78,7 +78,7 @@ class _AuthGateState extends State<AuthGate> {
       if (_currentUser!.isAdmin) {
         return const AdminDashboard();
       } else {
-        return const HomeDashboard();
+        return const HomePage();
       }
     }
 

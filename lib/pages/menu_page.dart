@@ -1,7 +1,24 @@
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
-import 'package:cloud_firestore/cloud_firestore.dart';
-import '../services/auth_service.dart';
+import '../services/student_state.dart';
+
+class MenuItemData {
+  final String id;
+  final String name;
+  final double price;
+  final String category; // Meals, Snacks, Drinks
+  final String imageUrl;
+  final IconData icon;
+
+  MenuItemData({
+    required this.id,
+    required this.name,
+    required this.price,
+    required this.category,
+    required this.imageUrl,
+    required this.icon,
+  });
+}
 
 class MenuPage extends StatefulWidget {
   const MenuPage({super.key});
@@ -11,574 +28,350 @@ class MenuPage extends StatefulWidget {
 }
 
 class _MenuPageState extends State<MenuPage> {
-  final AuthService _authService = AuthService();
-  String selectedCategory = 'All';
-  
-  // Check if user has scanned QR
-  bool _hasScannedQR = false;
+  final Color primaryColor = const Color(0xFF1E7B3B);
+  final StudentAppState _state = StudentAppState();
+  String _selectedCategory = 'All';
+  String _searchQuery = '';
+  final TextEditingController _searchController = TextEditingController();
+
+  final List<MenuItemData> _menuItems = [
+    MenuItemData(
+      id: 'chicken_meal',
+      name: 'Chicken Meal',
+      price: 95.0,
+      category: 'Meals',
+      imageUrl: 'https://images.unsplash.com/photo-1626645738196-c2a7c87a8f58?w=300&q=80',
+      icon: Icons.fastfood,
+    ),
+    MenuItemData(
+      id: 'beef_burger',
+      name: 'Beef Burger',
+      price: 75.0,
+      category: 'Meals',
+      imageUrl: 'https://images.unsplash.com/photo-1568901346375-23c9450c58cd?w=300&q=80',
+      icon: Icons.lunch_dining,
+    ),
+    MenuItemData(
+      id: 'french_fries',
+      name: 'French Fries',
+      price: 40.0,
+      category: 'Snacks',
+      imageUrl: 'https://images.unsplash.com/photo-1573080496219-bb080dd4f877?w=300&q=80',
+      icon: Icons.fastfood,
+    ),
+    MenuItemData(
+      id: 'choc_milk_tea',
+      name: 'Chocolate Milk Tea',
+      price: 60.0,
+      category: 'Drinks',
+      imageUrl: 'https://images.unsplash.com/photo-1558857563-b37cfb42e612?w=300&q=80',
+      icon: Icons.local_cafe,
+    ),
+    MenuItemData(
+      id: 'iced_coffee',
+      name: 'Iced Coffee',
+      price: 50.0,
+      category: 'Drinks',
+      imageUrl: 'https://images.unsplash.com/photo-1517256064527-09c73fc73e38?w=300&q=80',
+      icon: Icons.local_cafe,
+    ),
+  ];
 
   @override
-  void initState() {
-    super.initState();
-    _checkQRStatus();
-  }
-
-  Future<void> _checkQRStatus() async {
-    // In a real app, check if user has scanned a QR code
-    // For now, we'll check if there's any canteen data
-    final doc = await FirebaseFirestore.instance
-        .collection('canteen')
-        .doc('main')
-        .get();
-    
-    if (mounted) {
-      setState(() {
-        _hasScannedQR = doc.exists;
-      });
-    }
+  void dispose() {
+    _searchController.dispose();
+    super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
-    final user = _authService.currentUser;
+    final filteredItems = _menuItems.where((item) {
+      final matchesCategory = _selectedCategory == 'All' || item.category == _selectedCategory;
+      final matchesSearch = item.name.toLowerCase().contains(_searchQuery.toLowerCase());
+      return matchesCategory && matchesSearch;
+    }).toList();
 
     return Scaffold(
-      backgroundColor: Colors.grey[50],
-      body: CustomScrollView(
-        slivers: [
-          SliverAppBar(
-            expandedHeight: 140,
-            pinned: true,
-            backgroundColor: const Color(0xFFFF6B35),
-            flexibleSpace: FlexibleSpaceBar(
-              titlePadding: const EdgeInsets.only(left: 20, bottom: 16),
-              title: Text(
-                'Hi, ${user?.displayName?.split(' ').first ?? 'there'} 👋',
-                style: GoogleFonts.poppins(
-                  fontWeight: FontWeight.w600,
-                  fontSize: 18,
+      backgroundColor: const Color(0xFFF8F9FA),
+      appBar: AppBar(
+        backgroundColor: Colors.white,
+        elevation: 0,
+        centerTitle: true,
+        title: Text(
+          'Menu',
+          style: GoogleFonts.poppins(
+            fontWeight: FontWeight.w700,
+            fontSize: 20,
+            color: Colors.black87,
+          ),
+        ),
+        actions: [
+          AnimatedBuilder(
+            animation: _state,
+            builder: (context, _) {
+              return IconButton(
+                icon: Badge(
+                  label: Text(
+                    '${_state.totalCartCount}',
+                    style: const TextStyle(fontSize: 10, fontWeight: FontWeight.bold),
+                  ),
+                  isLabelVisible: _state.totalCartCount > 0,
+                  backgroundColor: primaryColor,
+                  child: const Icon(Icons.shopping_cart_outlined, color: Colors.black87),
                 ),
-              ),
-              background: Container(
-                decoration: BoxDecoration(
-                  gradient: LinearGradient(
-                    colors: [
-                      const Color(0xFFFF6B35),
-                      const Color(0xFFFF6B35).withValues(alpha: 0.7),
-                    ],
-                    begin: Alignment.topLeft,
-                    end: Alignment.bottomRight,
+                onPressed: () => _state.setTabIndex(2), // Go to Cart
+              );
+            },
+          ),
+          const SizedBox(width: 8),
+        ],
+      ),
+      body: Column(
+        children: [
+          // Search & Filter Row
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 14, 16, 10),
+            child: Row(
+              children: [
+                Expanded(
+                  child: Container(
+                    height: 48,
+                    decoration: BoxDecoration(
+                      color: Colors.white,
+                      borderRadius: BorderRadius.circular(14),
+                      border: Border.all(color: Colors.grey.shade300),
+                    ),
+                    child: TextField(
+                      controller: _searchController,
+                      onChanged: (val) => setState(() => _searchQuery = val),
+                      style: GoogleFonts.poppins(fontSize: 14),
+                      decoration: InputDecoration(
+                        hintText: 'Search food...',
+                        hintStyle: GoogleFonts.poppins(
+                          fontSize: 14,
+                          color: Colors.grey.shade400,
+                        ),
+                        prefixIcon: const Icon(Icons.search, color: Colors.grey, size: 22),
+                        border: InputBorder.none,
+                        contentPadding: const EdgeInsets.symmetric(vertical: 12),
+                      ),
+                    ),
                   ),
                 ),
-              ),
+                const SizedBox(width: 10),
+                Container(
+                  height: 48,
+                  width: 48,
+                  decoration: BoxDecoration(
+                    color: Colors.white,
+                    borderRadius: BorderRadius.circular(14),
+                    border: Border.all(color: Colors.grey.shade300),
+                  ),
+                  child: IconButton(
+                    icon: const Icon(Icons.tune_rounded, color: Colors.black87, size: 22),
+                    onPressed: () {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(
+                          content: Text('Filter options: All categories available'),
+                          duration: Duration(seconds: 1),
+                        ),
+                      );
+                    },
+                  ),
+                ),
+              ],
             ),
-            actions: [
-              IconButton(
-                icon: const Icon(Icons.shopping_cart_outlined),
-                onPressed: () {
-                  Navigator.pushNamed(context, '/cart');
-                },
-              ),
-              IconButton(
-                icon: const Icon(Icons.logout),
-                onPressed: () => _authService.signOut(),
-              ),
-            ],
           ),
-          
-          // Menu Content
-          SliverToBoxAdapter(
-            child: _buildMenuContent(),
+
+          // Categories Row
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                _buildCategoryItem('All', Icons.grid_view_rounded),
+                _buildCategoryItem('Meals', Icons.rice_bowl_rounded),
+                _buildCategoryItem('Snacks', Icons.fastfood_rounded),
+                _buildCategoryItem('Drinks', Icons.local_cafe_rounded),
+              ],
+            ),
+          ),
+          const SizedBox(height: 6),
+
+          // Product List
+          Expanded(
+            child: filteredItems.isEmpty
+                ? Center(
+                    child: Text(
+                      'No food items found',
+                      style: GoogleFonts.poppins(color: Colors.grey.shade600),
+                    ),
+                  )
+                : ListView.builder(
+                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                    itemCount: filteredItems.length,
+                    itemBuilder: (context, index) {
+                      final item = filteredItems[index];
+                      return _buildFoodCard(item);
+                    },
+                  ),
           ),
         ],
       ),
     );
   }
 
-  Widget _buildMenuContent() {
-    // If user hasn't scanned QR, show QR prompt
-    if (!_hasScannedQR) {
-      return Container(
-        height: 400,
-        padding: const EdgeInsets.all(32),
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
+  Widget _buildCategoryItem(String label, IconData icon) {
+    final bool isSelected = _selectedCategory == label;
+    return GestureDetector(
+      onTap: () => setState(() => _selectedCategory = label),
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 200),
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+        decoration: BoxDecoration(
+          color: isSelected ? primaryColor : Colors.white,
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(
+            color: isSelected ? primaryColor : Colors.grey.shade300,
+          ),
+          boxShadow: isSelected
+              ? [
+                  BoxShadow(
+                    color: primaryColor.withValues(alpha: 0.25),
+                    blurRadius: 8,
+                    offset: const Offset(0, 3),
+                  ),
+                ]
+              : [],
+        ),
+        child: Row(
           children: [
             Icon(
-              Icons.qr_code_scanner_rounded,
-              size: 80,
-              color: Colors.grey[300],
+              icon,
+              size: 18,
+              color: isSelected ? Colors.white : Colors.grey.shade700,
             ),
-            const SizedBox(height: 24),
+            const SizedBox(width: 6),
             Text(
-              'Scan QR Code First',
+              label,
               style: GoogleFonts.poppins(
-                fontSize: 22,
-                fontWeight: FontWeight.bold,
-                color: Colors.grey[800],
-              ),
-            ),
-            const SizedBox(height: 8),
-            Text(
-              'Please scan the QR code on the canteen table\nto access the menu and start ordering',
-              textAlign: TextAlign.center,
-              style: GoogleFonts.inter(
-                fontSize: 14,
-                color: Colors.grey[600],
-              ),
-            ),
-            const SizedBox(height: 32),
-            ElevatedButton.icon(
-              onPressed: () {
-                Navigator.pushNamed(context, '/scan');
-              },
-              style: ElevatedButton.styleFrom(
-                backgroundColor: const Color(0xFFFF6B35),
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 32,
-                  vertical: 16,
-                ),
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(14),
-                ),
-              ),
-              icon: const Icon(Icons.qr_code_scanner),
-              label: Text(
-                'Scan Now',
-                style: GoogleFonts.inter(
-                  fontWeight: FontWeight.w600,
-                  fontSize: 16,
-                ),
+                color: isSelected ? Colors.white : Colors.grey.shade800,
+                fontWeight: isSelected ? FontWeight.w600 : FontWeight.w500,
+                fontSize: 13,
               ),
             ),
           ],
         ),
-      );
-    }
-
-    // If scanned, show the menu
-    return Column(
-      children: [
-        // Category Filter
-        _buildCategoryFilter(),
-        
-        // Menu Grid
-        StreamBuilder<QuerySnapshot>(
-          stream: FirebaseFirestore.instance
-              .collection('menu_items')
-              .where('isAvailable', isEqualTo: true)
-              .snapshots(),
-          builder: (context, snapshot) {
-            if (snapshot.connectionState == ConnectionState.waiting) {
-              return const Padding(
-                padding: EdgeInsets.all(40),
-                child: Center(child: CircularProgressIndicator()),
-              );
-            }
-
-            if (!snapshot.hasData || snapshot.data!.docs.isEmpty) {
-              return Container(
-                height: 300,
-                padding: const EdgeInsets.all(32),
-                child: Column(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    Icon(
-                      Icons.restaurant_menu,
-                      size: 60,
-                      color: Colors.grey[300],
-                    ),
-                    const SizedBox(height: 16),
-                    Text(
-                      'No Menu Available',
-                      style: GoogleFonts.inter(
-                        fontSize: 18,
-                        color: Colors.grey[600],
-                      ),
-                    ),
-                    const SizedBox(height: 8),
-                    Text(
-                      'The canteen administrator has not added any menu items yet.',
-                      textAlign: TextAlign.center,
-                      style: GoogleFonts.inter(
-                        fontSize: 14,
-                        color: Colors.grey[400],
-                      ),
-                    ),
-                  ],
-                ),
-              );
-            }
-
-            final items = snapshot.data!.docs;
-            final filteredItems = selectedCategory == 'All'
-                ? items
-                : items.where((doc) {
-                    final data = doc.data() as Map<String, dynamic>;
-                    return data['category'] == selectedCategory.toLowerCase();
-                  }).toList();
-
-            if (filteredItems.isEmpty) {
-              return Container(
-                height: 200,
-                padding: const EdgeInsets.all(32),
-                child: Center(
-                  child: Text(
-                    'No items in this category',
-                    style: GoogleFonts.inter(
-                      fontSize: 16,
-                      color: Colors.grey[600],
-                    ),
-                  ),
-                ),
-              );
-            }
-
-            return Padding(
-              padding: const EdgeInsets.all(16),
-              child: GridView.builder(
-                shrinkWrap: true,
-                physics: const NeverScrollableScrollPhysics(),
-                gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-                  crossAxisCount: 2,
-                  mainAxisSpacing: 16,
-                  crossAxisSpacing: 16,
-                  childAspectRatio: 0.75,
-                ),
-                itemCount: filteredItems.length,
-                itemBuilder: (context, index) {
-                  final doc = filteredItems[index];
-                  final data = doc.data() as Map<String, dynamic>;
-                  return _MenuItemCard(
-                    id: doc.id,
-                    name: data['name'] ?? '',
-                    price: (data['price'] ?? 0).toDouble(),
-                    description: data['description'] ?? '',
-                    imageUrl: data['imageUrl'],
-                    isAvailable: data['isAvailable'] ?? true,
-                    stock: data['stock'] ?? 0,
-                  );
-                },
-              ),
-            );
-          },
-        ),
-      ],
+      ),
     );
   }
 
-  Widget _buildCategoryFilter() {
-    return StreamBuilder<QuerySnapshot>(
-      stream: FirebaseFirestore.instance
-          .collection('menu_items')
-          .where('isAvailable', isEqualTo: true)
-          .snapshots(),
-      builder: (context, snapshot) {
-        if (!snapshot.hasData) {
-          return Container();
-        }
+  Widget _buildFoodCard(MenuItemData item) {
+    return Container(
+      margin: const EdgeInsets.only(bottom: 14),
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: Colors.grey.shade200),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.03),
+            blurRadius: 8,
+            offset: const Offset(0, 3),
+          ),
+        ],
+      ),
+      child: Row(
+        children: [
+          // Food Image
+          ClipRRect(
+            borderRadius: BorderRadius.circular(14),
+            child: Container(
+              width: 76,
+              height: 76,
+              color: Colors.grey.shade100,
+              child: Image.network(
+                item.imageUrl,
+                fit: BoxFit.cover,
+                errorBuilder: (context, error, stackTrace) => Center(
+                  child: Icon(item.icon, size: 36, color: primaryColor),
+                ),
+              ),
+            ),
+          ),
+          const SizedBox(width: 14),
 
-        // Get unique categories
-        final Set<String> categories = {'All'};
-        for (var doc in snapshot.data!.docs) {
-          final data = doc.data() as Map<String, dynamic>;
-          final category = data['category'] ?? 'others';
-          categories.add(category.toString().toUpperCase());
-        }
+          // Name and Price
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  item.name,
+                  style: GoogleFonts.poppins(
+                    fontWeight: FontWeight.w600,
+                    fontSize: 15,
+                    color: Colors.black87,
+                  ),
+                ),
+                const SizedBox(height: 6),
+                Text(
+                  '₱${item.price.toStringAsFixed(0)}',
+                  style: GoogleFonts.poppins(
+                    fontWeight: FontWeight.w700,
+                    fontSize: 15,
+                    color: Colors.black87,
+                  ),
+                ),
+              ],
+            ),
+          ),
 
-        return Container(
-          color: Colors.white,
-          padding: const EdgeInsets.symmetric(vertical: 8),
-          height: 56,
-          child: ListView.builder(
-            scrollDirection: Axis.horizontal,
-            padding: const EdgeInsets.symmetric(horizontal: 16),
-            itemCount: categories.length,
-            itemBuilder: (context, index) {
-              final category = categories.elementAt(index);
-              final isSelected = category == selectedCategory;
-              return Padding(
-                padding: const EdgeInsets.only(right: 8),
-                child: FilterChip(
-                  label: Text(category),
-                  selected: isSelected,
-                  onSelected: (_) {
-                    setState(() {
-                      selectedCategory = category;
-                    });
-                  },
-                  backgroundColor: Colors.grey[100],
-                  selectedColor: const Color(0xFFFF6B35).withValues(alpha: 0.1),
-                  checkmarkColor: const Color(0xFFFF6B35),
-                  labelStyle: GoogleFonts.inter(
-                    fontSize: 13,
-                    fontWeight: isSelected ? FontWeight.w600 : FontWeight.w400,
-                    color: isSelected ? const Color(0xFFFF6B35) : Colors.grey[700],
-                  ),
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(20),
-                    side: BorderSide(
-                      color: isSelected ? const Color(0xFFFF6B35) : Colors.transparent,
-                    ),
-                  ),
+          // Add to Cart Button
+          GestureDetector(
+            onTap: () {
+              _state.addToCart(
+                item.id,
+                item.name,
+                item.price,
+                item.imageUrl,
+                item.icon,
+              );
+              ScaffoldMessenger.of(context).clearSnackBars();
+              ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(
+                  content: Text('Added ${item.name} to cart!'),
+                  duration: const Duration(milliseconds: 1200),
+                  behavior: SnackBarBehavior.floating,
+                  backgroundColor: primaryColor,
                 ),
               );
             },
-          ),
-        );
-      },
-    );
-  }
-}
-
-// Menu Item Card
-class _MenuItemCard extends StatelessWidget {
-  final String id;
-  final String name;
-  final double price;
-  final String description;
-  final String? imageUrl;
-  final bool isAvailable;
-  final int stock;
-
-  const _MenuItemCard({
-    required this.id,
-    required this.name,
-    required this.price,
-    required this.description,
-    this.imageUrl,
-    required this.isAvailable,
-    required this.stock,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return GestureDetector(
-      onTap: () {
-        // Show item details / add to cart
-        _showItemDetails(context);
-      },
-      child: Container(
-        decoration: BoxDecoration(
-          color: Colors.white,
-          borderRadius: BorderRadius.circular(16),
-          boxShadow: [
-            BoxShadow(
-              color: Colors.black.withValues(alpha: 0.05),
-              blurRadius: 10,
-              offset: const Offset(0, 4),
-            ),
-          ],
-        ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            // Image
-            Container(
-              height: 100,
-              width: double.infinity,
+            child: Container(
+              width: 38,
+              height: 38,
               decoration: BoxDecoration(
-                color: Colors.orange.shade50,
-                borderRadius: const BorderRadius.vertical(top: Radius.circular(16)),
-                image: imageUrl != null
-                    ? DecorationImage(
-                        image: NetworkImage(imageUrl!),
-                        fit: BoxFit.cover,
-                      )
-                    : null,
-              ),
-              child: imageUrl == null
-                  ? Icon(
-                      Icons.fastfood_rounded,
-                      size: 40,
-                      color: Colors.orange[700],
-                    )
-                  : null,
-            ),
-            Padding(
-              padding: const EdgeInsets.all(12),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    name,
-                    style: GoogleFonts.inter(
-                      fontWeight: FontWeight.w600,
-                      fontSize: 15,
-                    ),
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
+                color: primaryColor,
+                shape: BoxShape.circle,
+                boxShadow: [
+                  BoxShadow(
+                    color: primaryColor.withValues(alpha: 0.3),
+                    blurRadius: 6,
+                    offset: const Offset(0, 2),
                   ),
-                  const SizedBox(height: 4),
-                  Text(
-                    description,
-                    style: GoogleFonts.inter(
-                      fontSize: 12,
-                      color: Colors.grey[600],
-                    ),
-                    maxLines: 2,
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                  const SizedBox(height: 8),
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      Text(
-                        '₱${price.toStringAsFixed(2)}',
-                        style: GoogleFonts.inter(
-                          fontWeight: FontWeight.bold,
-                          fontSize: 16,
-                          color: const Color(0xFFFF6B35),
-                        ),
-                      ),
-                      Container(
-                        decoration: BoxDecoration(
-                          color: isAvailable && stock > 0
-                              ? const Color(0xFFFF6B35)
-                              : Colors.grey,
-                          shape: BoxShape.circle,
-                        ),
-                        child: Icon(
-                          isAvailable && stock > 0 ? Icons.add : Icons.close,
-                          color: Colors.white,
-                          size: 20,
-                        ),
-                      ),
-                    ],
-                  ),
-                  if (stock < 10 && stock > 0)
-                    Padding(
-                      padding: const EdgeInsets.only(top: 4),
-                      child: Text(
-                        'Only $stock left',
-                        style: GoogleFonts.inter(
-                          fontSize: 10,
-                          color: Colors.orange,
-                          fontWeight: FontWeight.w500,
-                        ),
-                      ),
-                    ),
-                  if (!isAvailable || stock <= 0)
-                    Padding(
-                      padding: const EdgeInsets.only(top: 4),
-                      child: Text(
-                        'Sold Out',
-                        style: GoogleFonts.inter(
-                          fontSize: 10,
-                          color: Colors.red,
-                          fontWeight: FontWeight.w500,
-                        ),
-                      ),
-                    ),
                 ],
+              ),
+              child: const Icon(
+                Icons.add,
+                color: Colors.white,
+                size: 24,
               ),
             ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  void _showItemDetails(BuildContext context) {
-    showModalBottomSheet(
-      context: context,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-      ),
-      builder: (context) {
-        return Container(
-          padding: const EdgeInsets.all(24),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Center(
-                child: Container(
-                  width: 60,
-                  height: 4,
-                  decoration: BoxDecoration(
-                    color: Colors.grey[300],
-                    borderRadius: BorderRadius.circular(2),
-                  ),
-                ),
-              ),
-              const SizedBox(height: 16),
-              Text(
-                name,
-                style: GoogleFonts.poppins(
-                  fontSize: 20,
-                  fontWeight: FontWeight.bold,
-                ),
-              ),
-              const SizedBox(height: 8),
-              Text(
-                description,
-                style: GoogleFonts.inter(
-                  fontSize: 14,
-                  color: Colors.grey[600],
-                ),
-              ),
-              const SizedBox(height: 16),
-              Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  Text(
-                    'Price',
-                    style: GoogleFonts.inter(
-                      fontWeight: FontWeight.w500,
-                      color: Colors.grey[600],
-                    ),
-                  ),
-                  Text(
-                    '₱${price.toStringAsFixed(2)}',
-                    style: GoogleFonts.poppins(
-                      fontSize: 24,
-                      fontWeight: FontWeight.bold,
-                      color: const Color(0xFFFF6B35),
-                    ),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 16),
-              Row(
-                children: [
-                  Expanded(
-                    child: ElevatedButton(
-                      onPressed: isAvailable && stock > 0
-                          ? () {
-                              // Add to cart
-                              Navigator.pop(context);
-                              ScaffoldMessenger.of(context).showSnackBar(
-                                SnackBar(
-                                  content: Text('$name added to cart!'),
-                                  backgroundColor: Colors.green,
-                                ),
-                              );
-                            }
-                          : null,
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: const Color(0xFFFF6B35),
-                        foregroundColor: Colors.white,
-                        padding: const EdgeInsets.symmetric(vertical: 14),
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(14),
-                        ),
-                      ),
-                      child: Text(
-                        isAvailable && stock > 0 ? 'Add to Cart' : 'Sold Out',
-                        style: GoogleFonts.inter(
-                          fontWeight: FontWeight.w600,
-                          fontSize: 16,
-                        ),
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-            ],
           ),
-        );
-      },
+          const SizedBox(width: 4),
+        ],
+      ),
     );
   }
 }

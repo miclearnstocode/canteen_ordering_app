@@ -8,7 +8,7 @@ import '../models/user_model.dart';
 class AuthService {
   final FirebaseAuth _auth = FirebaseAuth.instance;
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
-  
+
   // Only initialize GoogleSignIn on mobile platforms (not web)
   final GoogleSignIn? _googleSignIn = kIsWeb ? null : GoogleSignIn();
 
@@ -37,60 +37,40 @@ class AuthService {
   // Sign in with username OR email
   Future<AppUser?> signInWithUser(String userIdentifier, String password) async {
     try {
-      
       // Check if the identifier is an email or username
       final bool isEmail = userIdentifier.contains('@') && userIdentifier.contains('.');
-      
+
       String email;
-      
+
       if (isEmail) {
         // It's an email, use it directly
         email = userIdentifier;
       } else {
         // It's a username, look up the email
-        
-        // Query Firestore for user by username
         final query = await _firestore
             .collection('users')
             .where('username', isEqualTo: userIdentifier)
             .limit(1)
             .get();
-        
+
         if (query.docs.isEmpty) {
-          // Try case-insensitive search
-          final allUsers = await _firestore.collection('users').get();
-          String? foundEmail;
-          
-          for (var doc in allUsers.docs) {
-            final data = doc.data();
-            final user = data['username'] ?? '';
-            if (user.toLowerCase() == userIdentifier.toLowerCase()) {
-              foundEmail = data['email'];
-              break;
-            }
-          }
-          
-          if (foundEmail == null) {
-            throw Exception('User not found. Please check your username or email.');
-          }
-          
-          email = foundEmail;
-        } else {
-          final data = query.docs.first.data();
-          email = data['email'] ?? '';
+          throw Exception('No account found with username "$userIdentifier"');
         }
+
+        final userData = query.docs.first.data();
+        email = userData['email'] ?? '';
       }
-      
+
       if (email.isEmpty) {
         throw Exception('User email not found. Please contact support.');
       }
-      
+
       // Sign in with Firebase Auth using email and password
       final userCredential = await _auth.signInWithEmailAndPassword(
         email: email,
         password: password,
       );
-      
+
       final user = userCredential.user;
       if (user != null) {
         await _updateLastLogin(user.uid);
@@ -108,7 +88,7 @@ class AuthService {
     }
   }
 
-  // Sign in with email and password (kept for compatibility)
+  // Sign in with email and password
   Future<AppUser?> signInWithEmail(String email, String password) async {
     try {
       final userCredential = await _auth.signInWithEmailAndPassword(
@@ -140,7 +120,7 @@ class AuthService {
           .where('username', isEqualTo: username)
           .limit(1)
           .get();
-      
+
       if (existingUser.docs.isNotEmpty) {
         throw Exception('Username already taken. Please choose another.');
       }
@@ -153,7 +133,7 @@ class AuthService {
       if (user != null) {
         await user.updateDisplayName(username);
         await user.reload();
-        
+
         final appUser = AppUser(
           uid: user.uid,
           email: email,
@@ -163,13 +143,13 @@ class AuthService {
           createdAt: DateTime.now(),
           lastLoginAt: DateTime.now(),
           isActive: true,
-          points: 0,
+          points: 125,
           preferences: {
             'notifications': true,
             'theme': 'light',
           },
         );
-        
+
         await _firestore.collection('users').doc(user.uid).set(appUser.toMap());
         return appUser;
       }
@@ -179,31 +159,27 @@ class AuthService {
     }
   }
 
-  // Sign in with Google - works on mobile and web with proper setup
+  // Sign in with Google
   Future<AppUser?> signInWithGoogle() async {
-    // Check if Google Sign-In is available
     if (_googleSignIn == null && !kIsWeb) {
       throw Exception('Google Sign-In is not available on this platform.');
     }
-    
+
     try {
       final GoogleSignInAccount? googleUser;
-      
+
       if (kIsWeb) {
-        // Web Google Sign-In
         final GoogleSignIn googleSignIn = GoogleSignIn();
         googleUser = await googleSignIn.signIn();
       } else {
-        // Mobile Google Sign-In
         googleUser = await _googleSignIn!.signIn();
       }
-      
+
       if (googleUser == null) {
         return null;
       }
 
-      final GoogleSignInAuthentication googleAuth =
-          await googleUser.authentication;
+      final GoogleSignInAuthentication googleAuth = await googleUser.authentication;
 
       final credential = GoogleAuthProvider.credential(
         accessToken: googleAuth.accessToken,
@@ -212,7 +188,7 @@ class AuthService {
 
       final userCredential = await _auth.signInWithCredential(credential);
       final user = userCredential.user;
-      
+
       if (user != null) {
         final doc = await _firestore.collection('users').doc(user.uid).get();
         if (!doc.exists) {
@@ -240,7 +216,7 @@ class AuthService {
       createdAt: DateTime.now(),
       lastLoginAt: DateTime.now(),
       isActive: true,
-      points: 0,
+      points: 125,
       preferences: {
         'notifications': true,
         'theme': 'light',
@@ -267,9 +243,8 @@ class AuthService {
           'isActive': false,
         });
       }
-      // Only sign out Google if not on web - FIXED: removed unnecessary '!'
       if (!kIsWeb && _googleSignIn != null) {
-        await _googleSignIn.signOut(); // No '!' needed here
+        await _googleSignIn.signOut();
       }
       await _auth.signOut();
     } catch (e) {

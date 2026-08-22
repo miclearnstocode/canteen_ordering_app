@@ -1,6 +1,5 @@
-// lib/pages/register_page.dart
-import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:google_fonts/google_fonts.dart';
 import '../services/auth_service.dart';
 import '../models/user_model.dart';
@@ -19,10 +18,11 @@ class _RegisterPageState extends State<RegisterPage> {
   final _fullNameController = TextEditingController();
   final _passwordController = TextEditingController();
   final _confirmPasswordController = TextEditingController();
+  UserRole _selectedRole = UserRole.user;
   bool _loading = false;
   bool _obscurePassword = true;
   bool _obscureConfirmPassword = true;
-  UserRole _selectedRole = UserRole.user;
+  final Color primaryColor = const Color(0xFF2E7D32);
 
   @override
   void dispose() {
@@ -104,11 +104,11 @@ class _RegisterPageState extends State<RegisterPage> {
                   width: 80,
                   height: 80,
                   decoration: BoxDecoration(
-                    color: const Color(0xFFFF6B35),
+                    color: primaryColor,
                     shape: BoxShape.circle,
                     boxShadow: [
                       BoxShadow(
-                        color: const Color(0xFFFF6B35).withValues(alpha: 0.3),
+                        color: primaryColor.withValues(alpha: 0.3),
                         blurRadius: 20,
                         offset: const Offset(0, 10),
                       ),
@@ -393,7 +393,7 @@ class _RegisterPageState extends State<RegisterPage> {
                           : ElevatedButton(
                               onPressed: _handleRegister,
                               style: ElevatedButton.styleFrom(
-                                backgroundColor: const Color(0xFFFF6B35),
+                                backgroundColor: primaryColor,
                                 foregroundColor: Colors.white,
                                 shape: RoundedRectangleBorder(
                                   borderRadius: BorderRadius.circular(14),
@@ -434,7 +434,7 @@ class _RegisterPageState extends State<RegisterPage> {
                     child: Text(
                       'Login',
                       style: GoogleFonts.inter(
-                        color: const Color(0xFFFF6B35),
+                        color: primaryColor,
                         fontWeight: FontWeight.w600,
                       ),
                     ),
@@ -469,7 +469,7 @@ class _RoleButton extends StatelessWidget {
       child: Container(
         padding: const EdgeInsets.symmetric(vertical: 12),
         decoration: BoxDecoration(
-          color: isSelected ? const Color(0xFFFF6B35) : Colors.transparent,
+          color: isSelected ? const Color(0xFF2E7D32) : Colors.transparent,
           borderRadius: BorderRadius.circular(12),
         ),
         child: Row(
