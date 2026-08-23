@@ -93,13 +93,13 @@ class HomeScreen extends StatelessWidget {
                       shape: BoxShape.circle,
                       border: Border.all(color: primaryColor.withValues(alpha: 0.3), width: 2),
                     ),
-                    child: CircleAvatar(
+                    child: const CircleAvatar(
                       radius: 28,
-                      backgroundColor: const Color(0xFFFFE0B2),
-                      backgroundImage: const NetworkImage(
+                      backgroundColor: Color(0xFFFFE0B2),
+                      backgroundImage: NetworkImage(
                         'https://api.dicebear.com/7.x/adventurer/png?seed=Marianne&backgroundColor=ffd5dc',
                       ),
-                      child: const SizedBox.shrink(),
+                      child: SizedBox.shrink(),
                     ),
                   ),
                 ),

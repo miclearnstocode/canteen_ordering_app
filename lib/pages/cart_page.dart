@@ -183,8 +183,8 @@ class _CartPageState extends State<CartPage> {
                                           children: [
                                             Container(
                                               padding: const EdgeInsets.all(16),
-                                              decoration: BoxDecoration(
-                                                color: const Color(0xFFE8F5E9),
+                                              decoration: const BoxDecoration(
+                                                color: Color(0xFFE8F5E9),
                                                 shape: BoxShape.circle,
                                               ),
                                               child: Icon(

@@ -8,7 +8,7 @@ class OrderHistoryPage extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final StudentAppState state = StudentAppState();
-    final Color primaryColor = const Color(0xFF2E7D32);
+    const Color primaryColor = Color(0xFF2E7D32);
 
     return Scaffold(
       backgroundColor: const Color(0xFFF5F5F5),
