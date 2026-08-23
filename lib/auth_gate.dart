@@ -4,7 +4,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'services/auth_service.dart';
 import 'pages/login_page.dart';
 import 'pages/home_page.dart';
-import 'pages/admin/admin_dashboard.dart';
+import 'pages/admin/admin_dashboard_shell.dart';
 import 'models/user_model.dart';
 
 class AuthGate extends StatefulWidget {
@@ -27,7 +27,7 @@ class _AuthGateState extends State<AuthGate> {
 
   Future<void> _checkAuthStatus() async {
     _authService.authStateChanges.listen((User? user) async {
-      setState(() => _isLoading = true);
+      if (mounted) setState(() => _isLoading = true);
       
       if (user != null) {
         final appUser = await _authService.getCurrentUserData();
@@ -41,22 +41,28 @@ class _AuthGateState extends State<AuthGate> {
           
           // Reload user data
           final updatedUser = await _authService.getCurrentUserData();
-          setState(() {
-            _currentUser = updatedUser;
-            _isLoading = false;
-          });
+          if (mounted) {
+            setState(() {
+              _currentUser = updatedUser;
+              _isLoading = false;
+            });
+          }
           return;
         }
         
-        setState(() {
-          _currentUser = appUser;
-          _isLoading = false;
-        });
+        if (mounted) {
+          setState(() {
+            _currentUser = appUser;
+            _isLoading = false;
+          });
+        }
       } else {
-        setState(() {
-          _currentUser = null;
-          _isLoading = false;
-        });
+        if (mounted) {
+          setState(() {
+            _currentUser = null;
+            _isLoading = false;
+          });
+        }
       }
     });
   }
@@ -76,7 +82,7 @@ class _AuthGateState extends State<AuthGate> {
     if (_currentUser != null) {
       // Route based on role
       if (_currentUser!.isAdmin) {
-        return const AdminDashboard();
+        return const AdminDashboardShell();
       } else {
         return const HomePage();
       }
