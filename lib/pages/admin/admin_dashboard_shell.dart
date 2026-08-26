@@ -16,6 +16,16 @@ class _AdminDashboardShellState extends State<AdminDashboardShell> {
   int _selectedIndex = 0;
   final Color adminPurple = const Color(0xFF5E35B1);
 
+  final List<Widget> _pages = [
+    const AdminDashboardPage(),
+    const AdminOrdersPage(),
+    const AdminMenuManagementPage(),
+    const AdminInventoryPage(),
+    const AdminLoyaltyRewardsPage(),
+    const AdminRedemptionPage(),
+    const AdminPaymentsPage(),
+    const AdminReportsPage(),
+    const AdminAccountsPage(),
   final List<Widget> _pages = const [
     AdminDashboardPage(),
     AdminOrdersPage(),
@@ -28,6 +38,16 @@ class _AdminDashboardShellState extends State<AdminDashboardShell> {
     AdminAccountsPage(),
   ];
 
+  final List<IconData> _icons = [
+    Icons.dashboard_outlined,
+    Icons.receipt_long_outlined,
+    Icons.restaurant_menu_outlined,
+    Icons.inventory_2_outlined,
+    Icons.stars_outlined,
+    Icons.qr_code_scanner_outlined,
+    Icons.payments_outlined,
+    Icons.insert_chart_outlined,
+    Icons.people_outline,
   final List<Map<String, dynamic>> _navItems = const [
     {'icon': Icons.dashboard_outlined, 'activeIcon': Icons.dashboard, 'label': 'Dashboard'},
     {'icon': Icons.receipt_long_outlined, 'activeIcon': Icons.receipt_long, 'label': 'Orders'},
@@ -184,6 +204,18 @@ class _AdminDashboardShellState extends State<AdminDashboardShell> {
           : null,
       body: Row(
         children: [
+          // Dark Sidebar
+          Container(
+            width: 90,
+            color: const Color(0xFF1E1E1E),
+            child: Column(
+              children: [
+                const SizedBox(height: 20),
+                Container(
+                  padding: const EdgeInsets.all(12),
+                  decoration: const BoxDecoration(
+                    color: Color(0xFF2E2E2E),
+                    shape: BoxShape.circle,
           // Sidebar for Tablet/Desktop
           if (!isSmallScreen)
             Container(
@@ -204,6 +236,22 @@ class _AdminDashboardShellState extends State<AdminDashboardShell> {
                       child: const Icon(Icons.storefront, color: Colors.white, size: 24),
                     ),
                   ),
+                  child: const Icon(Icons.local_cafe, color: Colors.white, size: 24),
+                ),
+                const SizedBox(height: 40),
+                Expanded(
+                  child: ListView.builder(
+                    itemCount: _icons.length,
+                    itemBuilder: (context, index) {
+                      return GestureDetector(
+                        onTap: () => setState(() => _selectedIndex = index),
+                        child: Container(
+                          height: 60,
+                          decoration: BoxDecoration(
+                            color: _selectedIndex == index ? adminPurple : Colors.transparent,
+                            borderRadius: const BorderRadius.only(
+                              topLeft: Radius.circular(20),
+                              bottomLeft: Radius.circular(20),
                   const SizedBox(height: 24),
                   // Navigation Items
                   Expanded(
@@ -254,6 +302,11 @@ class _AdminDashboardShellState extends State<AdminDashboardShell> {
                               ),
                             ),
                           ),
+                          child: Icon(
+                            _icons[index],
+                            color: Colors.white,
+                            size: 24,
+                          ),
                         );
                       },
                     ),
@@ -275,13 +328,19 @@ class _AdminDashboardShellState extends State<AdminDashboardShell> {
                             ),
                           ],
                         ),
+                      );
+                    },
                       ),
                     ),
                   ),
+                ),
+              ],
                   const SizedBox(height: 12),
                 ],
               ),
             ),
+          ),
+          // Main Content
           // Main Content View
           Expanded(
             child: _pages[_selectedIndex],

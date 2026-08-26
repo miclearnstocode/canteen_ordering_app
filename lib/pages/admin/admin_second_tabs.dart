@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 
+class AdminRedemptionPage extends StatelessWidget {
 // ==========================================
 // 6. ADMIN REDEMPTION PAGE
 // ==========================================
@@ -101,32 +102,52 @@ class _AdminRedemptionPageState extends State<AdminRedemptionPage> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
+      backgroundColor: const Color(0xFFF5F5F5),
+      body: Padding(
       backgroundColor: const Color(0xFFF8F9FA),
       body: SingleChildScrollView(
         padding: const EdgeInsets.all(24),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
+            Text('Scan Redemption QR Code', style: GoogleFonts.poppins(fontSize: 24, fontWeight: FontWeight.bold)),
+            const SizedBox(height: 20),
             Text('Scan & Claim Rewards', style: GoogleFonts.poppins(fontSize: 24, fontWeight: FontWeight.w700)),
             const SizedBox(height: 16),
             Container(
               padding: const EdgeInsets.all(24),
               decoration: BoxDecoration(
                 color: Colors.white,
+                borderRadius: BorderRadius.circular(16),
                 borderRadius: BorderRadius.circular(18),
                 border: Border.all(color: Colors.grey.shade200),
               ),
               child: Column(
                 children: [
+                  // Mock QR Scanner Area
                   // Mock Scanner Frame
                   Container(
+                    width: 200, height: 200,
                     width: 180,
                     height: 180,
                     decoration: BoxDecoration(
+                      border: Border.all(color: green, width: 3),
+                      borderRadius: BorderRadius.circular(16),
                       color: Colors.grey.shade50,
                       border: Border.all(color: green, width: 2.5),
                       borderRadius: BorderRadius.circular(18),
                     ),
+                    child: const Center(child: Icon(Icons.qr_code_scanner, size: 80, color: green)),
+                  ),
+                  const SizedBox(height: 24),
+                  const Text('or'),
+                  const SizedBox(height: 24),
+                  TextField(
+                    decoration: InputDecoration(
+                      labelText: 'Enter Redemption Code',
+                      border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(12),
+                      ),
                     child: Column(
                       mainAxisAlignment: MainAxisAlignment.center,
                       children: [
@@ -139,6 +160,13 @@ class _AdminRedemptionPageState extends State<AdminRedemptionPage> {
                   const SizedBox(height: 20),
                   Text('— OR ENTER CODE MANUALLY —', style: GoogleFonts.poppins(fontSize: 11, color: Colors.grey.shade500, fontWeight: FontWeight.w600)),
                   const SizedBox(height: 16),
+                  SizedBox(
+                    width: double.infinity,
+                    child: ElevatedButton(
+                      onPressed: () {},
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: green,
+                        padding: const EdgeInsets.symmetric(vertical: 16),
                   Row(
                     children: [
                       Expanded(
@@ -153,6 +181,8 @@ class _AdminRedemptionPageState extends State<AdminRedemptionPage> {
                           ),
                         ),
                       ),
+                      child: const Text('Search', style: TextStyle(color: Colors.white)),
+                    ),
                       const SizedBox(width: 12),
                       ElevatedButton(
                         onPressed: _verifyCode,
@@ -165,6 +195,14 @@ class _AdminRedemptionPageState extends State<AdminRedemptionPage> {
                         child: const Text('Verify'),
                       ),
                     ],
+                  ),
+                  const SizedBox(height: 16),
+                  const Divider(),
+                  ListTile(
+                    leading: const Icon(Icons.history),
+                    title: Text('Redemption History', style: GoogleFonts.poppins(fontWeight: FontWeight.bold)),
+                    trailing: const Icon(Icons.chevron_right),
+                    onTap: () {},
                   ),
                 ],
               ),
@@ -206,6 +244,7 @@ class _AdminRedemptionPageState extends State<AdminRedemptionPage> {
   }
 }
 
+class AdminPaymentsPage extends StatelessWidget {
 // ==========================================
 // 7. ADMIN PAYMENTS PAGE
 // ==========================================
@@ -245,16 +284,22 @@ class _AdminPaymentsPageState extends State<AdminPaymentsPage> {
         : _payments.where((p) => (p['method'] as String).toLowerCase() == _selectedFilter.toLowerCase()).toList();
 
     return Scaffold(
+      backgroundColor: const Color(0xFFF5F5F5),
       backgroundColor: const Color(0xFFF8F9FA),
       body: Padding(
         padding: const EdgeInsets.all(24),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
+            Text('Payments', style: GoogleFonts.poppins(fontSize: 24, fontWeight: FontWeight.bold)),
             Text('Payments & Transactions', style: GoogleFonts.poppins(fontSize: 24, fontWeight: FontWeight.w700)),
             const SizedBox(height: 16),
             // Filter Chips
             Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                _tab('All', true), _tab('Cash', false), _tab('GCash', false),
+              ],
               children: ['All', 'Cash', 'GCash'].map((filter) {
                 final isSelected = _selectedFilter == filter;
                 return Padding(
@@ -274,15 +319,27 @@ class _AdminPaymentsPageState extends State<AdminPaymentsPage> {
                 );
               }).toList(),
             ),
+            const SizedBox(height: 20),
             const SizedBox(height: 16),
             Expanded(
               child: Container(
                 padding: const EdgeInsets.all(16),
                 decoration: BoxDecoration(
                   color: Colors.white,
+                  borderRadius: BorderRadius.circular(16),
                   borderRadius: BorderRadius.circular(18),
                   border: Border.all(color: Colors.grey.shade200),
                 ),
+                child: Column(
+                  children: [
+                    _paymentRow('#10025', '10:30 AM', 'Marianne Santos', 'Cash', '₱315', 'Paid', Colors.green),
+                    const Divider(),
+                    _paymentRow('#10026', '10:32 AM', 'John Dela Cruz', 'GCash', '₱190', 'Verify', const Color(0xFF5E35B1)),
+                    const Divider(),
+                    _paymentRow('#10027', '10:34 AM', 'Andrea Reyes', 'Cash', '₱120', 'Paid', Colors.green),
+                    const Divider(),
+                    _paymentRow('#10028', '10:40 AM', 'Mark Garcia', 'GCash', '₱250', 'Verify', const Color(0xFF5E35B1)),
+                  ],
                 child: ListView.separated(
                   itemCount: filtered.length,
                   separatorBuilder: (context, i) => Divider(color: Colors.grey.shade100),
@@ -337,6 +394,18 @@ class _AdminPaymentsPageState extends State<AdminPaymentsPage> {
                 ),
               ),
             ),
+            const SizedBox(height: 16),
+            SizedBox(
+              width: double.infinity,
+              child: ElevatedButton(
+                onPressed: () {},
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: adminPurple,
+                  padding: const EdgeInsets.symmetric(vertical: 16),
+                ),
+                child: const Text('View All Payments'),
+              ),
+            ),
           ],
         ),
       ),
@@ -344,6 +413,12 @@ class _AdminPaymentsPageState extends State<AdminPaymentsPage> {
   }
 }
 
+  Widget _tab(String text, bool isActive) {
+    return Text(text, style: GoogleFonts.poppins(
+      color: isActive ? adminPurple : Colors.grey,
+      fontWeight: isActive ? FontWeight.bold : FontWeight.normal,
+    ));
+  }
 // ==========================================
 // 8. ADMIN REPORTS PAGE
 // ==========================================
@@ -352,6 +427,21 @@ class AdminReportsPage extends StatelessWidget {
   static const Color adminPurple = Color(0xFF5E35B1);
   static const Color green = Color(0xFF2E7D32);
 
+  Widget _paymentRow(String id, String time, String name, String method, String amount, String status, Color statusColor) {
+    return Row(
+      children: [
+        Text(id, style: GoogleFonts.poppins(fontWeight: FontWeight.bold)),
+        const SizedBox(width: 20),
+        Expanded(child: Text(time, style: GoogleFonts.inter(color: Colors.grey[600]))),
+        Expanded(child: Text(name, style: GoogleFonts.inter(color: Colors.grey[600]))),
+        Expanded(child: Text(method, style: GoogleFonts.inter(color: Colors.grey[600]))),
+        Text(amount, style: GoogleFonts.poppins(fontWeight: FontWeight.bold)),
+        const SizedBox(width: 10),
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+          decoration: BoxDecoration(
+            color: statusColor.withValues(alpha: 0.1),
+            borderRadius: BorderRadius.circular(8),
   void _showReportDialog(BuildContext context, String title) {
     showDialog(
       context: context,
@@ -369,30 +459,53 @@ class AdminReportsPage extends StatelessWidget {
             style: ElevatedButton.styleFrom(backgroundColor: green, foregroundColor: Colors.white),
             child: const Text('Download PDF'),
           ),
+          child: Text(status, style: GoogleFonts.poppins(fontSize: 12, color: statusColor, fontWeight: FontWeight.w600)),
+        ),
+      ],
         ],
       ),
     );
   }
+}
+
+class AdminReportsPage extends StatelessWidget {
+  const AdminReportsPage({super.key});
+  final Color adminPurple = const Color(0xFF5E35B1);
+  final Color green = const Color(0xFF2E7D32);
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
+      backgroundColor: const Color(0xFFF5F5F5),
       backgroundColor: const Color(0xFFF8F9FA),
       body: Padding(
         padding: const EdgeInsets.all(24),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
+            Text('Reports', style: GoogleFonts.poppins(fontSize: 24, fontWeight: FontWeight.bold)),
+            const SizedBox(height: 20),
             Text('Sales & Analytical Reports', style: GoogleFonts.poppins(fontSize: 24, fontWeight: FontWeight.w700)),
             const SizedBox(height: 16),
             Container(
+              padding: const EdgeInsets.all(16),
               decoration: BoxDecoration(
                 color: Colors.white,
+                borderRadius: BorderRadius.circular(16),
                 borderRadius: BorderRadius.circular(18),
                 border: Border.all(color: Colors.grey.shade200),
               ),
               child: Column(
                 children: [
+                  _reportTile(Icons.calendar_today, 'Daily Sales Report'),
+                  const Divider(),
+                  _reportTile(Icons.calendar_month, 'Monthly Sales Report'),
+                  const Divider(),
+                  _reportTile(Icons.restaurant, 'Best Selling Foods'),
+                  const Divider(),
+                  _reportTile(Icons.inventory, 'Inventory Report'),
+                  const Divider(),
+                  _reportTile(Icons.stars, 'Loyalty Redemption Report'),
                   _reportTile(context, Icons.calendar_today, 'Daily Sales Report', 'Summary of all transactions today'),
                   const Divider(height: 1),
                   _reportTile(context, Icons.calendar_month, 'Monthly Sales Report', 'Revenue breakdown for current month'),
@@ -410,12 +523,16 @@ class AdminReportsPage extends StatelessWidget {
               children: [
                 Expanded(
                   child: ElevatedButton.icon(
+                    onPressed: () {},
                     onPressed: () {
                       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Exporting PDF...')));
                     },
                     icon: const Icon(Icons.picture_as_pdf),
+                    label: const Text('Export PDF'),
                     label: const Text('Export All PDF'),
                     style: ElevatedButton.styleFrom(
+                      backgroundColor: Colors.red,
+                      padding: const EdgeInsets.symmetric(vertical: 16),
                       backgroundColor: Colors.red.shade700,
                       foregroundColor: Colors.white,
                       padding: const EdgeInsets.symmetric(vertical: 14),
@@ -426,13 +543,16 @@ class AdminReportsPage extends StatelessWidget {
                 const SizedBox(width: 16),
                 Expanded(
                   child: ElevatedButton.icon(
+                    onPressed: () {},
                     onPressed: () {
                       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Exporting Excel spreadsheet...'), backgroundColor: green));
                     },
                     icon: const Icon(Icons.grid_on),
+                    label: const Text('Export Excel'),
                     label: const Text('Export Excel (CSV)'),
                     style: ElevatedButton.styleFrom(
                       backgroundColor: green,
+                      padding: const EdgeInsets.symmetric(vertical: 16),
                       foregroundColor: Colors.white,
                       padding: const EdgeInsets.symmetric(vertical: 14),
                       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
@@ -447,8 +567,13 @@ class AdminReportsPage extends StatelessWidget {
     );
   }
 
+  Widget _reportTile(IconData icon, String title) {
   Widget _reportTile(BuildContext context, IconData icon, String title, String subtitle) {
     return ListTile(
+      leading: Icon(icon, color: adminPurple),
+      title: Text(title, style: GoogleFonts.poppins(fontWeight: FontWeight.bold)),
+      trailing: const Icon(Icons.chevron_right),
+      onTap: () {},
       leading: Container(
         padding: const EdgeInsets.all(8),
         decoration: BoxDecoration(color: adminPurple.withValues(alpha: 0.1), shape: BoxShape.circle),
@@ -462,6 +587,7 @@ class AdminReportsPage extends StatelessWidget {
   }
 }
 
+class AdminAccountsPage extends StatelessWidget {
 // ==========================================
 // 9. ADMIN ACCOUNTS PAGE
 // ==========================================
@@ -500,12 +626,15 @@ class _AdminAccountsPageState extends State<AdminAccountsPage> {
         (s['course'] as String).toLowerCase().contains(query)).toList();
 
     return Scaffold(
+      backgroundColor: const Color(0xFFF5F5F5),
       backgroundColor: const Color(0xFFF8F9FA),
       body: Padding(
         padding: const EdgeInsets.all(24),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
+            Text('Student Accounts', style: GoogleFonts.poppins(fontSize: 24, fontWeight: FontWeight.bold)),
+            const SizedBox(height: 20),
             Text('Student Accounts Directory', style: GoogleFonts.poppins(fontSize: 24, fontWeight: FontWeight.w700)),
             const SizedBox(height: 16),
             TextField(
@@ -526,9 +655,24 @@ class _AdminAccountsPageState extends State<AdminAccountsPage> {
                 padding: const EdgeInsets.all(16),
                 decoration: BoxDecoration(
                   color: Colors.white,
+                  borderRadius: BorderRadius.circular(16),
                   borderRadius: BorderRadius.circular(18),
                   border: Border.all(color: Colors.grey.shade200),
                 ),
+                child: SingleChildScrollView(
+                  child: Column(
+                    children: [
+                      _accountRow('Marianne Santos', 'BSIT - 2A', '125', '18', 'Active', Colors.green),
+                      const Divider(),
+                      _accountRow('John Dela Cruz', 'BSIT - 2A', '80', '15', 'Active', Colors.green),
+                      const Divider(),
+                      _accountRow('Andrea Reyes', 'BSIT - 1B', '45', '9', 'Active', Colors.green),
+                      const Divider(),
+                      _accountRow('Mark Garcia', 'BSIT - 3A', '60', '12', 'Active', Colors.green),
+                      const Divider(),
+                      _accountRow('Kyle Villanueva', 'BSIT - 1A', '30', '6', 'Active', Colors.green),
+                    ],
+                  ),
                 child: ListView.separated(
                   itemCount: filtered.length,
                   separatorBuilder: (context, i) => Divider(color: Colors.grey.shade100),
@@ -568,11 +712,20 @@ class _AdminAccountsPageState extends State<AdminAccountsPage> {
                 ),
               ),
             ),
+            const SizedBox(height: 16),
             const SizedBox(height: 12),
             // Pagination
             Row(
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
+                _pageButton('1', true),
+                _pageButton('2', false),
+                _pageButton('3', false),
+                const SizedBox(width: 8),
+                const Text('...'),
+                const SizedBox(width: 8),
+                _pageButton('10', false),
+                const Icon(Icons.chevron_right, size: 20),
                 _pageBtn('1', _currentPage == 1),
                 _pageBtn('2', _currentPage == 2),
                 _pageBtn('3', _currentPage == 3),
@@ -584,6 +737,18 @@ class _AdminAccountsPageState extends State<AdminAccountsPage> {
     );
   }
 
+  Widget _accountRow(String name, String course, String points, String orders, String status, Color statusColor) {
+    return Row(
+      children: [
+        Expanded(child: Text(name, style: GoogleFonts.poppins(fontWeight: FontWeight.bold))),
+        Expanded(child: Text(course, style: GoogleFonts.inter())),
+        Expanded(child: Text(points, style: GoogleFonts.inter())),
+        Expanded(child: Text(orders, style: GoogleFonts.inter())),
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+          decoration: BoxDecoration(
+            color: statusColor.withValues(alpha: 0.1),
+            borderRadius: BorderRadius.circular(8),
   Widget _pageBtn(String page, bool isCurrent) {
     return InkWell(
       onTap: () => setState(() => _currentPage = int.parse(page)),
@@ -602,6 +767,25 @@ class _AdminAccountsPageState extends State<AdminAccountsPage> {
             fontSize: 12,
             color: isCurrent ? Colors.white : Colors.black87,
           ),
+          child: Text(status, style: GoogleFonts.poppins(fontSize: 12, color: statusColor, fontWeight: FontWeight.w600)),
+        ),
+      ],
+    );
+  }
+
+  Widget _pageButton(String text, bool isActive) {
+    return Container(
+      margin: const EdgeInsets.symmetric(horizontal: 4),
+      padding: const EdgeInsets.all(8),
+      decoration: BoxDecoration(
+        color: isActive ? adminPurple : Colors.transparent,
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Text(
+        text,
+        style: GoogleFonts.poppins(
+          color: isActive ? Colors.white : Colors.black,
+          fontWeight: FontWeight.bold,
         ),
       ),
     );

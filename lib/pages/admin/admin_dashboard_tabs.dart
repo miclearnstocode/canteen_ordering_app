@@ -6,18 +6,22 @@ import 'package:google_fonts/google_fonts.dart';
 // ==========================================
 class AdminDashboardPage extends StatelessWidget {
   const AdminDashboardPage({super.key});
+  final Color adminPurple = const Color(0xFF5E35B1);
+  final Color green = const Color(0xFF2E7D32);
   static const Color adminPurple = Color(0xFF5E35B1);
   static const Color green = Color(0xFF2E7D32);
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
+      backgroundColor: const Color(0xFFF5F5F5),
       backgroundColor: const Color(0xFFF8F9FA),
       body: SingleChildScrollView(
         padding: const EdgeInsets.all(24),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
+            Text('Dashboard', style: GoogleFonts.poppins(fontSize: 24, fontWeight: FontWeight.bold)),
             Text(
               'Dashboard Overview',
               style: GoogleFonts.poppins(fontSize: 24, fontWeight: FontWeight.w700, color: Colors.black87),
@@ -28,6 +32,18 @@ class AdminDashboardPage extends StatelessWidget {
               style: GoogleFonts.poppins(fontSize: 13, color: Colors.grey.shade600),
             ),
             const SizedBox(height: 20),
+            
+            // Stats Row
+            Row(
+              children: [
+                _statCard('Today\'s Sales', '₱18,500', Icons.payments, green),
+                const SizedBox(width: 16),
+                _statCard('Orders Today', '235', Icons.receipt, const Color(0xFF1976D2)),
+                const SizedBox(width: 16),
+                _statCard('Pending Orders', '18', Icons.hourglass_top, Colors.orange),
+                const SizedBox(width: 16),
+                _statCard('Low Stock Items', '6', Icons.warning_amber, Colors.red),
+              ],
 
             // Responsive Stats Section
             LayoutBuilder(
@@ -62,12 +78,15 @@ class AdminDashboardPage extends StatelessWidget {
               },
             ),
             const SizedBox(height: 24),
+            
+            // Chart Placeholder
 
             // Sales Chart Container
             Container(
               padding: const EdgeInsets.all(24),
               decoration: BoxDecoration(
                 color: Colors.white,
+                borderRadius: BorderRadius.circular(16),
                 borderRadius: BorderRadius.circular(18),
                 border: Border.all(color: Colors.grey.shade200),
                 boxShadow: [
@@ -81,6 +100,8 @@ class AdminDashboardPage extends StatelessWidget {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
+                  Text('Sales Overview (This Week)', style: GoogleFonts.poppins(fontSize: 16, fontWeight: FontWeight.bold)),
+                  const SizedBox(height: 20),
                   Row(
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
@@ -113,6 +134,7 @@ class AdminDashboardPage extends StatelessWidget {
                   const SizedBox(height: 24),
                   // Mock Line Chart
                   SizedBox(
+                    height: 150,
                     height: 160,
                     width: double.infinity,
                     child: CustomPaint(
@@ -139,6 +161,28 @@ class AdminDashboardPage extends StatelessWidget {
     );
   }
 
+  Widget _statCard(String title, String value, IconData icon, Color color) {
+    return Expanded(
+      child: Container(
+        padding: const EdgeInsets.all(20),
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(16),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Text(title, style: GoogleFonts.poppins(fontSize: 12, color: Colors.grey[600])),
+                Icon(icon, color: color, size: 20),
+              ],
+            ),
+            const SizedBox(height: 10),
+            Text(value, style: GoogleFonts.poppins(fontSize: 28, fontWeight: FontWeight.bold, color: Colors.black87)),
+          ],
+        ),
   Widget _statCard(String title, String value, IconData icon, Color color, String subtitle) {
     return Container(
       padding: const EdgeInsets.all(18),
@@ -193,6 +237,7 @@ class AdminDashboardPage extends StatelessWidget {
   }
 }
 
+class AdminOrdersPage extends StatelessWidget {
 // ==========================================
 // 2. ADMIN ORDERS PAGE
 // ==========================================
@@ -292,6 +337,48 @@ class _AdminOrdersPageState extends State<AdminOrdersPage> {
         : _orders.where((o) => (o['status'] as String).toLowerCase() == _selectedTab.toLowerCase()).toList();
 
     return Scaffold(
+      backgroundColor: const Color(0xFFF5F5F5),
+      body: Column(
+        children: [
+          Padding(
+            padding: const EdgeInsets.all(24),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text('Orders', style: GoogleFonts.poppins(fontSize: 24, fontWeight: FontWeight.bold)),
+                const SizedBox(height: 16),
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    _tab('All', true), _tab('Pending', false), _tab('Preparing', false), _tab('Ready', false), _tab('Completed', false),
+                  ],
+                ),
+              ],
+            ),
+          ),
+          Expanded(
+            child: Container(
+              margin: const EdgeInsets.symmetric(horizontal: 24),
+              padding: const EdgeInsets.all(16),
+              decoration: BoxDecoration(
+                color: Colors.white,
+                borderRadius: BorderRadius.circular(16),
+              ),
+              child: Column(
+                children: [
+                  _orderRow('#10025', '10:30 AM', 'Marianne Santos', 'Cash', '₱315', 'Pending', Colors.orange),
+                  const Divider(),
+                  _orderRow('#10026', '10:32 AM', 'John Dela Cruz', 'GCash', '₱190', 'Preparing', adminPurple),
+                  const Divider(),
+                  _orderRow('#10027', '10:34 AM', 'Andrea Reyes', 'Cash', '₱120', 'Ready', Colors.green),
+                  const Divider(),
+                  _orderRow('#10028', '10:40 AM', 'Mark Garcia', 'GCash', '₱250', 'Completed', Colors.grey),
+                  const SizedBox(height: 20),
+                  ElevatedButton(
+                    onPressed: () {},
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: adminPurple,
+                      padding: const EdgeInsets.symmetric(horizontal: 40, vertical: 16),
       backgroundColor: const Color(0xFFF8F9FA),
       body: Padding(
         padding: const EdgeInsets.all(24),
@@ -320,10 +407,15 @@ class _AdminOrdersPageState extends State<AdminOrdersPage> {
                         if (selected) setState(() => _selectedTab = tab);
                       },
                     ),
+                    child: const Text('View All Orders'),
+                  ),
+                ],
                   );
                 }).toList(),
               ),
             ),
+          ),
+        ],
             const SizedBox(height: 16),
             // Orders Table / List
             Expanded(
@@ -411,16 +503,47 @@ class _AdminOrdersPageState extends State<AdminOrdersPage> {
   }
 }
 
+  Widget _tab(String text, bool isActive) {
+    return Text(text, style: GoogleFonts.poppins(
+      color: isActive ? adminPurple : Colors.grey,
+      fontWeight: isActive ? FontWeight.bold : FontWeight.normal,
+      decoration: isActive ? TextDecoration.underline : TextDecoration.none,
+      decorationColor: adminPurple,
+    ));
+  }
 // ==========================================
 // 3. ADMIN MENU MANAGEMENT PAGE
 // ==========================================
 class AdminMenuManagementPage extends StatefulWidget {
   const AdminMenuManagementPage({super.key});
 
+  Widget _orderRow(String id, String time, String name, String method, String amount, String status, Color statusColor) {
+    return Row(
+      children: [
+        Text(id, style: GoogleFonts.poppins(fontWeight: FontWeight.bold)),
+        const SizedBox(width: 20),
+        Expanded(child: Text(time, style: GoogleFonts.inter(color: Colors.grey[600]))),
+        Expanded(child: Text(name, style: GoogleFonts.inter(color: Colors.grey[600]))),
+        Expanded(child: Text(method, style: GoogleFonts.inter(color: Colors.grey[600]))),
+        Text(amount, style: GoogleFonts.poppins(fontWeight: FontWeight.bold)),
+        const SizedBox(width: 10),
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+          decoration: BoxDecoration(
+            color: statusColor.withValues(alpha: 0.1),
+            borderRadius: BorderRadius.circular(8),
+          ),
+          child: Text(status, style: GoogleFonts.poppins(fontSize: 12, color: statusColor, fontWeight: FontWeight.w600)),
+        ),
+      ],
+    );
+  }
   @override
   State<AdminMenuManagementPage> createState() => _AdminMenuManagementPageState();
 }
 
+class AdminMenuManagementPage extends StatelessWidget {
+  const AdminMenuManagementPage({super.key});
 class _AdminMenuManagementPageState extends State<AdminMenuManagementPage> {
   final Color adminPurple = const Color(0xFF5E35B1);
   final Color green = const Color(0xFF2E7D32);
@@ -454,12 +577,23 @@ class _AdminMenuManagementPageState extends State<AdminMenuManagementPage> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
+      backgroundColor: const Color(0xFFF5F5F5),
+      body: Padding(
       backgroundColor: const Color(0xFFF8F9FA),
       body: SingleChildScrollView(
         padding: const EdgeInsets.all(24),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
+            Text('Add / Edit Food', style: GoogleFonts.poppins(fontSize: 24, fontWeight: FontWeight.bold)),
+            const SizedBox(height: 20),
+            Expanded(
+              child: Container(
+                padding: const EdgeInsets.all(24),
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  borderRadius: BorderRadius.circular(16),
+                ),
             Text('Menu Item Editor', style: GoogleFonts.poppins(fontSize: 24, fontWeight: FontWeight.w700)),
             const SizedBox(height: 16),
             Container(
@@ -474,6 +608,9 @@ class _AdminMenuManagementPageState extends State<AdminMenuManagementPage> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
+                    Text('Food Name', style: GoogleFonts.poppins(fontWeight: FontWeight.bold)),
+                    const SizedBox(height: 8),
+                    _textField('Beef Burger'),
                     Text('Food Name', style: GoogleFonts.poppins(fontWeight: FontWeight.w600, fontSize: 13)),
                     const SizedBox(height: 6),
                     TextFormField(
@@ -486,6 +623,9 @@ class _AdminMenuManagementPageState extends State<AdminMenuManagementPage> {
                       validator: (val) => val == null || val.isEmpty ? 'Please enter name' : null,
                     ),
                     const SizedBox(height: 16),
+                    Text('Category', style: GoogleFonts.poppins(fontWeight: FontWeight.bold)),
+                    const SizedBox(height: 8),
+                    _textField('Meals'),
 
                     Text('Category', style: GoogleFonts.poppins(fontWeight: FontWeight.w600, fontSize: 13)),
                     const SizedBox(height: 6),
@@ -503,6 +643,9 @@ class _AdminMenuManagementPageState extends State<AdminMenuManagementPage> {
                       },
                     ),
                     const SizedBox(height: 16),
+                    Text('Price', style: GoogleFonts.poppins(fontWeight: FontWeight.bold)),
+                    const SizedBox(height: 8),
+                    _textField('75'),
 
                     Text('Price (₱)', style: GoogleFonts.poppins(fontWeight: FontWeight.w600, fontSize: 13)),
                     const SizedBox(height: 6),
@@ -518,6 +661,28 @@ class _AdminMenuManagementPageState extends State<AdminMenuManagementPage> {
                       validator: (val) => val == null || val.isEmpty ? 'Please enter price' : null,
                     ),
                     const SizedBox(height: 16),
+                    Text('Description', style: GoogleFonts.poppins(fontWeight: FontWeight.bold)),
+                    const SizedBox(height: 8),
+                    _textField('Juicy beef patty with vegetables'),
+                    const SizedBox(height: 16),
+                    Row(
+                      children: [
+                        Container(
+                          width: 80, height: 80,
+                          decoration: BoxDecoration(
+                            color: Colors.grey[200],
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                          child: const Icon(Icons.fastfood, color: Colors.orange, size: 40),
+                        ),
+                        const SizedBox(width: 16),
+                        ElevatedButton.icon(
+                          onPressed: () {},
+                          icon: const Icon(Icons.image),
+                          label: const Text('Change'),
+                          style: ElevatedButton.styleFrom(backgroundColor: Colors.grey[300], foregroundColor: Colors.black),
+                        ),
+                      ],
 
                     Text('Description', style: GoogleFonts.poppins(fontWeight: FontWeight.w600, fontSize: 13)),
                     const SizedBox(height: 6),
@@ -531,6 +696,12 @@ class _AdminMenuManagementPageState extends State<AdminMenuManagementPage> {
                       ),
                     ),
                     const SizedBox(height: 16),
+                    Row(
+                      children: [
+                        const Icon(Icons.check_circle, color: Colors.green),
+                        const SizedBox(width: 8),
+                        const Text('Available Today'),
+                      ],
 
                     // Availability Switch
                     SwitchListTile(
@@ -546,6 +717,9 @@ class _AdminMenuManagementPageState extends State<AdminMenuManagementPage> {
                     Row(
                       children: [
                         ElevatedButton(
+                          onPressed: () {},
+                          style: ElevatedButton.styleFrom(backgroundColor: green, padding: const EdgeInsets.symmetric(horizontal: 40, vertical: 16)),
+                          child: const Text('Save', style: TextStyle(color: Colors.white)),
                           onPressed: _saveItem,
                           style: ElevatedButton.styleFrom(
                             backgroundColor: green,
@@ -555,8 +729,12 @@ class _AdminMenuManagementPageState extends State<AdminMenuManagementPage> {
                           ),
                           child: const Text('Save Food Item'),
                         ),
+                        const SizedBox(width: 16),
                         const SizedBox(width: 14),
                         OutlinedButton(
+                          onPressed: () {},
+                          style: OutlinedButton.styleFrom(padding: const EdgeInsets.symmetric(horizontal: 40, vertical: 16)),
+                          child: const Text('Cancel'),
                           onPressed: () {
                             _nameController.clear();
                             _priceController.clear();
@@ -581,6 +759,12 @@ class _AdminMenuManagementPageState extends State<AdminMenuManagementPage> {
   }
 }
 
+  Widget _textField(String text) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+      decoration: BoxDecoration(
+        border: Border.all(color: Colors.grey[300]),
+        borderRadius: BorderRadius.circular(8),
 // ==========================================
 // 4. ADMIN INVENTORY PAGE
 // ==========================================
@@ -650,18 +834,27 @@ class _AdminInventoryPageState extends State<AdminInventoryPage> {
           ),
         ],
       ),
+      child: Text(text),
     );
   }
+}
+
+class AdminInventoryPage extends StatelessWidget {
+  const AdminInventoryPage({super.key});
+  final Color adminPurple = const Color(0xFF5E35B1);
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
+      backgroundColor: const Color(0xFFF5F5F5),
       backgroundColor: const Color(0xFFF8F9FA),
       body: Padding(
         padding: const EdgeInsets.all(24),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
+            Text('Inventory', style: GoogleFonts.poppins(fontSize: 24, fontWeight: FontWeight.bold)),
+            const SizedBox(height: 20),
             Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
@@ -684,9 +877,26 @@ class _AdminInventoryPageState extends State<AdminInventoryPage> {
                 padding: const EdgeInsets.all(16),
                 decoration: BoxDecoration(
                   color: Colors.white,
+                  borderRadius: BorderRadius.circular(16),
                   borderRadius: BorderRadius.circular(18),
                   border: Border.all(color: Colors.grey.shade200),
                 ),
+                child: SingleChildScrollView(
+                  child: Column(
+                    children: [
+                      _inventoryRow('Beef Patty', '35', '10', 'Normal', Colors.green),
+                      const Divider(),
+                      _inventoryRow('Chicken Fillet', '8', '10', 'Low', Colors.red),
+                      const Divider(),
+                      _inventoryRow('Rice', '50', '20', 'Normal', Colors.green),
+                      const Divider(),
+                      _inventoryRow('French Fries', '6', '10', 'Low', Colors.red),
+                      const Divider(),
+                      _inventoryRow('Milk Tea', '15', '10', 'Normal', Colors.green),
+                      const Divider(),
+                      _inventoryRow('Soft Drink', '25', '10', 'Normal', Colors.green),
+                    ],
+                  ),
                 child: ListView.separated(
                   itemCount: _inventory.length,
                   separatorBuilder: (context, i) => Divider(color: Colors.grey.shade100),
@@ -741,6 +951,18 @@ class _AdminInventoryPageState extends State<AdminInventoryPage> {
                 ),
               ),
             ),
+            const SizedBox(height: 16),
+            SizedBox(
+              width: double.infinity,
+              child: ElevatedButton(
+                onPressed: () {},
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: adminPurple,
+                  padding: const EdgeInsets.symmetric(vertical: 16),
+                ),
+                child: const Text('Add New Item'),
+              ),
+            ),
           ],
         ),
       ),
@@ -748,6 +970,16 @@ class _AdminInventoryPageState extends State<AdminInventoryPage> {
   }
 }
 
+  Widget _inventoryRow(String item, String stock, String min, String status, Color color) {
+    return Row(
+      children: [
+        Expanded(child: Text(item, style: GoogleFonts.poppins(fontWeight: FontWeight.bold))),
+        Expanded(child: Text(stock, style: GoogleFonts.inter())),
+        Expanded(child: Text(min, style: GoogleFonts.inter())),
+        Expanded(child: Text(status, style: GoogleFonts.poppins(color: color))),
+      ],
+    );
+  }
 // ==========================================
 // 5. ADMIN LOYALTY REWARDS PAGE
 // ==========================================
@@ -758,6 +990,8 @@ class AdminLoyaltyRewardsPage extends StatefulWidget {
   State<AdminLoyaltyRewardsPage> createState() => _AdminLoyaltyRewardsPageState();
 }
 
+class AdminLoyaltyRewardsPage extends StatelessWidget {
+  const AdminLoyaltyRewardsPage({super.key});
 class _AdminLoyaltyRewardsPageState extends State<AdminLoyaltyRewardsPage> {
   final Color adminPurple = const Color(0xFF5E35B1);
 
@@ -771,12 +1005,15 @@ class _AdminLoyaltyRewardsPageState extends State<AdminLoyaltyRewardsPage> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
+      backgroundColor: const Color(0xFFF5F5F5),
       backgroundColor: const Color(0xFFF8F9FA),
       body: Padding(
         padding: const EdgeInsets.all(24),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
+            Text('Loyalty Rewards', style: GoogleFonts.poppins(fontSize: 24, fontWeight: FontWeight.bold)),
+            const SizedBox(height: 20),
             Text('Loyalty Reward Offerings', style: GoogleFonts.poppins(fontSize: 24, fontWeight: FontWeight.w700)),
             const SizedBox(height: 16),
             Expanded(
@@ -784,9 +1021,20 @@ class _AdminLoyaltyRewardsPageState extends State<AdminLoyaltyRewardsPage> {
                 padding: const EdgeInsets.all(16),
                 decoration: BoxDecoration(
                   color: Colors.white,
+                  borderRadius: BorderRadius.circular(16),
                   borderRadius: BorderRadius.circular(18),
                   border: Border.all(color: Colors.grey.shade200),
                 ),
+                child: Column(
+                  children: [
+                    _rewardToggle('Free Rice', '20 Points', Icons.rice_bowl, true),
+                    const Divider(),
+                    _rewardToggle('Free Soft Drink', '30 Points', Icons.local_drink, true),
+                    const Divider(),
+                    _rewardToggle('Free Fries', '40 Points', Icons.fastfood, true),
+                    const Divider(),
+                    _rewardToggle('Free Burger', '80 Points', Icons.lunch_dining, true),
+                  ],
                 child: ListView.separated(
                   itemCount: _rewards.length,
                   separatorBuilder: (context, i) => Divider(color: Colors.grey.shade100),
@@ -813,13 +1061,45 @@ class _AdminLoyaltyRewardsPageState extends State<AdminLoyaltyRewardsPage> {
                 ),
               ),
             ),
+            const SizedBox(height: 16),
+            SizedBox(
+              width: double.infinity,
+              child: ElevatedButton(
+                onPressed: () {},
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: adminPurple,
+                  padding: const EdgeInsets.symmetric(vertical: 16),
+                ),
+                child: const Text('Add New Reward'),
+              ),
+            ),
           ],
         ),
       ),
     );
   }
+
+  Widget _rewardToggle(String name, String points, IconData icon, bool value) {
+    return Row(
+      children: [
+        Icon(icon, color: adminPurple, size: 40),
+        const SizedBox(width: 16),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(name, style: GoogleFonts.poppins(fontWeight: FontWeight.bold)),
+              Text(points, style: GoogleFonts.inter(color: Colors.grey[600])),
+            ],
+          ),
+        ),
+        Switch(value: value, activeColor: adminPurple, onChanged: (val) {}),
+      ],
+    );
+  }
 }
 
+// Mock Painter for Line Chart
 // ==========================================
 // Line Chart Painter
 // ==========================================
@@ -839,10 +1119,17 @@ class LineChartPainter extends CustomPainter {
     final paint = Paint()
       ..color = const Color(0xFF5E35B1)
       ..strokeWidth = 3
+      ..style = PaintingStyle.stroke;
       ..style = PaintingStyle.stroke
       ..strokeCap = StrokeCap.round;
 
     final path = Path()
+      ..moveTo(0, size.height * 0.8)
+      ..lineTo(size.width * 0.2, size.height * 0.6)
+      ..lineTo(size.width * 0.4, size.height * 0.7)
+      ..lineTo(size.width * 0.6, size.height * 0.4)
+      ..lineTo(size.width * 0.8, size.height * 0.5)
+      ..lineTo(size.width, size.height * 0.2);
       ..moveTo(0, size.height * 0.75)
       ..lineTo(size.width * 0.16, size.height * 0.55)
       ..lineTo(size.width * 0.33, size.height * 0.65)
