@@ -12,8 +12,6 @@ import 'pages/cart_page.dart';
 import 'pages/orders_page.dart';
 import 'pages/rewards_page.dart';
 import 'pages/profile_page.dart';
-// Admin pages
-import 'pages/admin/admin_dashboard_shell.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -54,7 +52,6 @@ class CanteenApp extends StatelessWidget {
         '/orders': (context) => const OrdersPage(),
         '/rewards': (context) => const RewardsPage(),
         '/profile': (context) => const ProfilePage(),
-        '/admin': (context) => const AdminDashboardShell(),
       },
     );
   }
