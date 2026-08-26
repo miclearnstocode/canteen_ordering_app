@@ -490,7 +490,7 @@ class _AdminMenuManagementPageState extends State<AdminMenuManagementPage> {
                     Text('Category', style: GoogleFonts.poppins(fontWeight: FontWeight.w600, fontSize: 13)),
                     const SizedBox(height: 6),
                     DropdownButtonFormField<String>(
-                      value: _selectedCategory,
+                      initialValue: _selectedCategory,
                       decoration: InputDecoration(
                         border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
                         contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
@@ -537,7 +537,7 @@ class _AdminMenuManagementPageState extends State<AdminMenuManagementPage> {
                       contentPadding: EdgeInsets.zero,
                       title: Text('Available for ordering today', style: GoogleFonts.poppins(fontWeight: FontWeight.w500)),
                       value: _isAvailable,
-                      activeColor: green,
+                      activeThumbColor: green,
                       onChanged: (val) => setState(() => _isAvailable = val),
                     ),
                     const SizedBox(height: 24),
@@ -804,7 +804,7 @@ class _AdminLoyaltyRewardsPageState extends State<AdminLoyaltyRewardsPage> {
                       title: Text(reward['name'] as String, style: GoogleFonts.poppins(fontWeight: FontWeight.w600)),
                       subtitle: Text(reward['points'] as String, style: GoogleFonts.poppins(color: Colors.grey.shade600)),
                       value: reward['enabled'] as bool,
-                      activeColor: adminPurple,
+                      activeThumbColor: adminPurple,
                       onChanged: (val) {
                         setState(() => _rewards[index]['enabled'] = val);
                       },
