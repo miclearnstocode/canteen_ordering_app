@@ -1,5 +1,3 @@
-// lib/models/menu_item_model.dart
-import 'package:cloud_firestore/cloud_firestore.dart';
 
 enum MenuCategory {
   meals,
@@ -10,101 +8,67 @@ enum MenuCategory {
   others,
 }
 
-class MenuItem {
+class MenuItemModel {
   final String id;
-  final String name;
-  final String description;
-  final double price;
-  final MenuCategory category;
-  final String? imageUrl;
-  final bool isAvailable;
-  final int stock;
-  final bool isFeatured;
-  final int preparationTime; // in minutes
-  final List<String> tags;
-  final double rating;
-  final int reviewCount;
-  final DateTime createdAt;
-  final DateTime updatedAt;
+  String name;
+  String category;
+  double price;
+  String description;
+  int stock;
+  bool isAvailable;
 
-  MenuItem({
+  MenuItemModel({
     required this.id,
     required this.name,
-    required this.description,
-    required this.price,
     required this.category,
-    this.imageUrl,
+    required this.price,
+    required this.description,
+    required this.stock,
     this.isAvailable = true,
-    this.stock = 0,
-    this.isFeatured = false,
-    this.preparationTime = 10,
-    this.tags = const [],
-    this.rating = 0.0,
-    this.reviewCount = 0,
-    required this.createdAt,
-    required this.updatedAt,
   });
 
-  factory MenuItem.fromFirestore(DocumentSnapshot doc) {
-    final data = doc.data() as Map<String, dynamic>;
-    return MenuItem(
-      id: doc.id,
-      name: data['name'] ?? '',
-      description: data['description'] ?? '',
-      price: (data['price'] ?? 0).toDouble(),
-      category: _parseCategory(data['category'] ?? 'others'),
-      imageUrl: data['imageUrl'],
-      isAvailable: data['isAvailable'] ?? true,
-      stock: data['stock'] ?? 0,
-      isFeatured: data['isFeatured'] ?? false,
-      preparationTime: data['preparationTime'] ?? 10,
-      tags: List<String>.from(data['tags'] ?? []),
-      rating: (data['rating'] ?? 0.0).toDouble(),
-      reviewCount: data['reviewCount'] ?? 0,
-      createdAt: (data['createdAt'] as Timestamp?)?.toDate() ?? DateTime.now(),
-      updatedAt: (data['updatedAt'] as Timestamp?)?.toDate() ?? DateTime.now(),
+  // Copy with method for updating
+  MenuItemModel copyWith({
+    String? name,
+    String? category,
+    double? price,
+    String? description,
+    int? stock,
+    bool? isAvailable,
+  }) {
+    return MenuItemModel(
+      id: id,
+      name: name ?? this.name,
+      category: category ?? this.category,
+      price: price ?? this.price,
+      description: description ?? this.description,
+      stock: stock ?? this.stock,
+      isAvailable: isAvailable ?? this.isAvailable,
     );
   }
 
-  static MenuCategory _parseCategory(String value) {
-    switch (value.toLowerCase()) {
-      case 'meals':
-        return MenuCategory.meals;
-      case 'drinks':
-        return MenuCategory.drinks;
-      case 'pastas':
-        return MenuCategory.pastas;
-      case 'snacks':
-        return MenuCategory.snacks;
-      case 'desserts':
-        return MenuCategory.desserts;
-      case 'others':
-        return MenuCategory.others;
-      default:
-        return MenuCategory.others;
-    }
+  // Convert from Firestore (Optional for later real backend implementation)
+  factory MenuItemModel.fromMap(String id, Map<String, dynamic> map) {
+    return MenuItemModel(
+      id: id,
+      name: map['name'] ?? '',
+      category: map['category'] ?? 'Meals',
+      price: (map['price'] as num?)?.toDouble() ?? 0.0,
+      description: map['description'] ?? '',
+      stock: map['stock'] ?? 0,
+      isAvailable: map['isAvailable'] ?? true,
+    );
   }
 
+  // Convert to Map for Firestore (Optional for later real backend implementation)
   Map<String, dynamic> toMap() {
     return {
       'name': name,
-      'description': description,
+      'category': category,
       'price': price,
-      'category': category.name,
-      'imageUrl': imageUrl,
-      'isAvailable': isAvailable,
+      'description': description,
       'stock': stock,
-      'isFeatured': isFeatured,
-      'preparationTime': preparationTime,
-      'tags': tags,
-      'rating': rating,
-      'reviewCount': reviewCount,
-      'createdAt': Timestamp.fromDate(createdAt),
-      'updatedAt': Timestamp.fromDate(updatedAt),
+      'isAvailable': isAvailable,
     };
   }
-
-  String get formattedPrice => '₱${price.toStringAsFixed(2)}';
-  String get categoryDisplayName => category.name.toUpperCase();
-  bool get isInStock => stock > 0 && isAvailable;
 }

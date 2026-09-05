@@ -1,9 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
+import '../../models/menu_item_model.dart';
 
-// ==========================================
-// 1. ADMIN DASHBOARD PAGE
-// ==========================================
 class AdminDashboardPage extends StatelessWidget {
   const AdminDashboardPage({super.key});
   static const Color adminPurple = Color(0xFF5E35B1);
@@ -412,7 +411,7 @@ class _AdminOrdersPageState extends State<AdminOrdersPage> {
 }
 
 // ==========================================
-// 3. ADMIN MENU MANAGEMENT PAGE (UPDATED)
+// 3. ADMIN MENU MANAGEMENT PAGE (Firebase)
 // ==========================================
 class AdminMenuManagementPage extends StatefulWidget {
   const AdminMenuManagementPage({super.key});
@@ -424,15 +423,22 @@ class AdminMenuManagementPage extends StatefulWidget {
 class _AdminMenuManagementPageState extends State<AdminMenuManagementPage> {
   final Color adminPurple = const Color(0xFF5E35B1);
   final Color green = const Color(0xFF2E7D32);
+  final CollectionReference _menuCollection = FirebaseFirestore.instance.collection('menu_items');
 
-  // Mock Data for existing menu items
-  final List<Map<String, dynamic>> _menuItems = [
-    {'name': 'Beef Burger', 'category': 'Meals', 'price': '75', 'desc': 'Juicy beef patty with fresh vegetables', 'available': true},
-    {'name': 'Chicken Meal', 'category': 'Meals', 'price': '95', 'desc': 'Grilled chicken with rice and sides', 'available': true},
-    {'name': 'French Fries', 'category': 'Snacks', 'price': '40', 'desc': 'Crispy golden fries', 'available': true},
-    {'name': 'Milk Tea', 'category': 'Drinks', 'price': '60', 'desc': 'Creamy milk tea with pearls', 'available': true},
-    {'name': 'Iced Coffee', 'category': 'Drinks', 'price': '50', 'desc': 'Iced coffee with milk', 'available': true},
-  ];
+  // Add new item to Firebase
+  Future<void> _addItem(MenuItemModel item) async {
+    await _menuCollection.add(item.toMap());
+  }
+
+  // Edit item in Firebase
+  Future<void> _updateItem(String id, MenuItemModel updatedItem) async {
+    await _menuCollection.doc(id).update(updatedItem.toMap());
+  }
+
+  // Delete item from Firebase
+  Future<void> _deleteItem(String id) async {
+    await _menuCollection.doc(id).delete();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -460,8 +466,10 @@ class _AdminMenuManagementPageState extends State<AdminMenuManagementPage> {
               ],
             ),
             const SizedBox(height: 4),
-            Text('Tap on any item to edit its details', style: GoogleFonts.poppins(fontSize: 13, color: Colors.grey.shade600)),
+            Text('Tap to edit • Swipe left to delete', style: GoogleFonts.poppins(fontSize: 13, color: Colors.grey.shade600)),
             const SizedBox(height: 16),
+            
+            // Firebase StreamBuilder
             Expanded(
               child: Container(
                 padding: const EdgeInsets.all(16),
@@ -470,86 +478,116 @@ class _AdminMenuManagementPageState extends State<AdminMenuManagementPage> {
                   borderRadius: BorderRadius.circular(18),
                   border: Border.all(color: Colors.grey.shade200),
                 ),
-                child: ListView.separated(
-                  itemCount: _menuItems.length,
-                  separatorBuilder: (context, i) => Divider(color: Colors.grey.shade100),
-                  itemBuilder: (context, index) {
-                    final item = _menuItems[index];
-                    final bool isAvailable = item['available'] as bool;
+                child: StreamBuilder<QuerySnapshot>(
+                  stream: _menuCollection.orderBy('name').snapshots(),
+                  builder: (context, snapshot) {
+                    if (snapshot.hasError) {
+                      return Center(child: Text('Error: ${snapshot.error}'));
+                    }
 
-                    return ListTile(
-                      contentPadding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
-                      leading: Container(
-                        width: 48,
-                        height: 48,
-                        decoration: BoxDecoration(
-                          color: adminPurple.withValues(alpha: 0.1),
-                          borderRadius: BorderRadius.circular(12),
-                        ),
-                        child: Icon(
-                          item['category'] == 'Drinks' ? Icons.local_cafe : 
-                          item['category'] == 'Snacks' ? Icons.fastfood : 
-                          Icons.lunch_dining,
-                          color: adminPurple,
-                          size: 24,
-                        ),
-                      ),
-                      title: Text(
-                        item['name'] as String,
-                        style: GoogleFonts.poppins(fontWeight: FontWeight.w600, fontSize: 15),
-                      ),
-                      subtitle: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            item['category'] as String,
-                            style: GoogleFonts.poppins(fontSize: 12, color: Colors.grey.shade600),
+                    if (snapshot.connectionState == ConnectionState.waiting) {
+                      return const Center(child: CircularProgressIndicator(color: Color(0xFF5E35B1)));
+                    }
+
+                    if (snapshot.data!.docs.isEmpty) {
+                      return _buildEmptyState();
+                    }
+
+                    final docs = snapshot.data!.docs;
+
+                    return ListView.separated(
+                      itemCount: docs.length,
+                      separatorBuilder: (context, i) => Divider(color: Colors.grey.shade100),
+                      itemBuilder: (context, index) {
+                        final doc = docs[index];
+                        final item = MenuItemModel.fromMap(doc.id, doc.data() as Map<String, dynamic>);
+
+                        return Dismissible(
+                          key: Key(doc.id),
+                          direction: DismissDirection.endToStart,
+                          confirmDismiss: (direction) async {
+                            // Show confirmation dialog
+                            return await showDialog(
+                              context: context,
+                              builder: (BuildContext context) {
+                                return AlertDialog(
+                                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+                                  title: Text('Delete Item?', style: GoogleFonts.poppins(fontWeight: FontWeight.bold)),
+                                  content: Text('Are you sure you want to delete "${item.name}"? This action cannot be undone.'),
+                                  actions: [
+                                    TextButton(
+                                      onPressed: () => Navigator.of(context).pop(false),
+                                      child: const Text('Cancel', style: TextStyle(color: Colors.grey)),
+                                    ),
+                                    TextButton(
+                                      onPressed: () => Navigator.of(context).pop(true),
+                                      style: TextButton.styleFrom(foregroundColor: Colors.red),
+                                      child: const Text('Delete'),
+                                    ),
+                                  ],
+                                );
+                              },
+                            );
+                          },
+                          onDismissed: (direction) {
+                            _deleteItem(doc.id); // Delete from Firebase
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              SnackBar(content: Text('Deleted "${item.name}"'), backgroundColor: Colors.red.shade400),
+                            );
+                          },
+                          background: Container(
+                            alignment: Alignment.centerRight,
+                            padding: const EdgeInsets.symmetric(horizontal: 20),
+                            margin: const EdgeInsets.symmetric(vertical: 4),
+                            decoration: BoxDecoration(
+                              color: Colors.red.shade600,
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                            child: const Icon(Icons.delete, color: Colors.white),
                           ),
-                          Text(
-                            item['desc'] as String,
-                            style: GoogleFonts.poppins(fontSize: 12, color: Colors.grey.shade500),
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                          ),
-                        ],
-                      ),
-                      trailing: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Column(
-                            crossAxisAlignment: CrossAxisAlignment.end,
-                            mainAxisAlignment: MainAxisAlignment.center,
-                            children: [
-                              Text(
-                                '₱${item['price']}',
-                                style: GoogleFonts.poppins(
-                                  fontWeight: FontWeight.bold,
-                                  fontSize: 16,
-                                  color: adminPurple,
-                                ),
+                          child: ListTile(
+                            contentPadding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+                            onTap: () => _showEditItemDialog(context, item),
+                            leading: Container(
+                              width: 48, height: 48,
+                              decoration: BoxDecoration(color: adminPurple.withValues(alpha: 0.1), borderRadius: BorderRadius.circular(12)),
+                              child: Icon(
+                                item.category == 'Drinks' ? Icons.local_cafe : 
+                                item.category == 'Snacks' ? Icons.fastfood : 
+                                Icons.lunch_dining,
+                                color: adminPurple, size: 24,
                               ),
-                              Container(
-                                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-                                decoration: BoxDecoration(
-                                  color: isAvailable ? Colors.green.shade50 : Colors.red.shade50,
-                                  borderRadius: BorderRadius.circular(6),
+                            ),
+                            title: Text(item.name, style: GoogleFonts.poppins(fontWeight: FontWeight.w600, fontSize: 15)),
+                            subtitle: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text('${item.category} • Stock: ${item.stock}', style: GoogleFonts.poppins(fontSize: 12, color: Colors.grey.shade600)),
+                                Text(item.description, style: GoogleFonts.poppins(fontSize: 12, color: Colors.grey.shade500), maxLines: 1, overflow: TextOverflow.ellipsis),
+                              ],
+                            ),
+                            trailing: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Column(
+                                  crossAxisAlignment: CrossAxisAlignment.end,
+                                  mainAxisAlignment: MainAxisAlignment.center,
+                                  children: [
+                                    Text('₱${item.price.toStringAsFixed(0)}', style: GoogleFonts.poppins(fontWeight: FontWeight.bold, fontSize: 16, color: adminPurple)),
+                                    Container(
+                                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                                      decoration: BoxDecoration(color: item.isAvailable ? Colors.green.shade50 : Colors.red.shade50, borderRadius: BorderRadius.circular(6)),
+                                      child: Text(item.isAvailable ? 'Available' : 'Unavailable', style: GoogleFonts.poppins(fontSize: 10, fontWeight: FontWeight.w600, color: item.isAvailable ? Colors.green.shade700 : Colors.red.shade700)),
+                                    ),
+                                  ],
                                 ),
-                                child: Text(
-                                  isAvailable ? 'Available' : 'Unavailable',
-                                  style: GoogleFonts.poppins(
-                                    fontSize: 10,
-                                    fontWeight: FontWeight.w600,
-                                    color: isAvailable ? Colors.green.shade700 : Colors.red.shade700,
-                                  ),
-                                ),
-                              ),
-                            ],
+                                const SizedBox(width: 8),
+                                Icon(Icons.edit, color: Colors.grey.shade400, size: 20),
+                              ],
+                            ),
                           ),
-                          const SizedBox(width: 8),
-                          Icon(Icons.edit, color: Colors.grey.shade400, size: 20),
-                        ],
-                      ),
-                      onTap: () => _showEditItemDialog(context, index),
+                        );
+                      },
                     );
                   },
                 ),
@@ -561,13 +599,44 @@ class _AdminMenuManagementPageState extends State<AdminMenuManagementPage> {
     );
   }
 
-  void _showEditItemDialog(BuildContext context, int index) {
-    final item = _menuItems[index];
-    final nameController = TextEditingController(text: item['name']);
-    final priceController = TextEditingController(text: item['price']);
-    final descController = TextEditingController(text: item['desc']);
-    String selectedCategory = item['category'];
-    bool isAvailable = item['available'];
+  // Empty State Widget
+  Widget _buildEmptyState() {
+    return Center(
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          Container(
+            padding: const EdgeInsets.all(24),
+            decoration: BoxDecoration(
+              color: adminPurple.withValues(alpha: 0.1),
+              shape: BoxShape.circle,
+            ),
+            child: Icon(Icons.restaurant_menu, size: 64, color: adminPurple),
+          ),
+          const SizedBox(height: 20),
+          Text(
+            'No Menu Items Yet',
+            style: GoogleFonts.poppins(fontSize: 20, fontWeight: FontWeight.w700, color: Colors.black87),
+          ),
+          const SizedBox(height: 8),
+          Text(
+            'Click "Add New Item" to create your first menu item.',
+            style: GoogleFonts.poppins(fontSize: 14, color: Colors.grey.shade600),
+            textAlign: TextAlign.center,
+          ),
+        ],
+      ),
+    );
+  }
+
+  // ADD ITEM
+  void _showAddItemDialog(BuildContext context) {
+    final nameController = TextEditingController();
+    final priceController = TextEditingController();
+    final stockController = TextEditingController();
+    final descController = TextEditingController();
+    String selectedCategory = 'Meals';
+    bool isAvailable = true;
 
     showModalBottomSheet(
       context: context,
@@ -576,109 +645,55 @@ class _AdminMenuManagementPageState extends State<AdminMenuManagementPage> {
       builder: (context) => StatefulBuilder(
         builder: (context, setModalState) {
           return Container(
-            decoration: const BoxDecoration(
-              color: Colors.white,
-              borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-            ),
-            padding: EdgeInsets.only(
-              bottom: MediaQuery.of(context).viewInsets.bottom,
-            ),
+            decoration: const BoxDecoration(color: Colors.white, borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
+            padding: EdgeInsets.only(bottom: MediaQuery.of(context).viewInsets.bottom),
             child: SingleChildScrollView(
               padding: const EdgeInsets.all(24),
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  // Handle bar
-                  Center(
-                    child: Container(
-                      width: 40,
-                      height: 4,
-                      decoration: BoxDecoration(
-                        color: Colors.grey.shade300,
-                        borderRadius: BorderRadius.circular(2),
-                      ),
-                    ),
-                  ),
+                  Center(child: Container(width: 40, height: 4, decoration: BoxDecoration(color: Colors.grey.shade300, borderRadius: BorderRadius.circular(2)))),
                   const SizedBox(height: 20),
-                  
                   Row(
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
-                      Text(
-                        'Edit ${item['name']}',
-                        style: GoogleFonts.poppins(fontSize: 20, fontWeight: FontWeight.w700),
-                      ),
-                      IconButton(
-                        onPressed: () => Navigator.pop(context),
-                        icon: const Icon(Icons.close),
-                        color: Colors.grey.shade600,
-                      ),
+                      Text('Add New Menu Item', style: GoogleFonts.poppins(fontSize: 20, fontWeight: FontWeight.w700)),
+                      IconButton(onPressed: () => Navigator.pop(context), icon: const Icon(Icons.close), color: Colors.grey.shade600),
                     ],
                   ),
                   const SizedBox(height: 20),
 
-                  // Food Name
                   Text('Food Name', style: GoogleFonts.poppins(fontWeight: FontWeight.w600, fontSize: 13)),
                   const SizedBox(height: 6),
-                  TextField(
-                    controller: nameController,
-                    decoration: InputDecoration(
-                      hintText: 'e.g. Chicken Meal',
-                      border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
-                      contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-                    ),
-                  ),
+                  TextField(controller: nameController, decoration: InputDecoration(hintText: 'e.g. Chicken Meal', border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)), contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12))),
                   const SizedBox(height: 16),
 
-                  // Category
                   Text('Category', style: GoogleFonts.poppins(fontWeight: FontWeight.w600, fontSize: 13)),
                   const SizedBox(height: 6),
                   DropdownButtonFormField<String>(
                     initialValue: selectedCategory,
-                    decoration: InputDecoration(
-                      border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
-                      contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-                    ),
-                    items: ['Meals', 'Snacks', 'Drinks', 'Desserts', 'Pastas']
-                        .map((cat) => DropdownMenuItem(value: cat, child: Text(cat)))
-                        .toList(),
-                    onChanged: (val) {
-                      if (val != null) setModalState(() => selectedCategory = val);
-                    },
+                    decoration: InputDecoration(border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)), contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12)),
+                    items: ['Meals', 'Snacks', 'Drinks', 'Desserts', 'Pastas'].map((cat) => DropdownMenuItem(value: cat, child: Text(cat))).toList(),
+                    onChanged: (val) { if (val != null) setModalState(() => selectedCategory = val); },
                   ),
                   const SizedBox(height: 16),
 
-                  // Price
                   Text('Price (₱)', style: GoogleFonts.poppins(fontWeight: FontWeight.w600, fontSize: 13)),
                   const SizedBox(height: 6),
-                  TextField(
-                    controller: priceController,
-                    keyboardType: TextInputType.number,
-                    decoration: InputDecoration(
-                      hintText: 'e.g. 75',
-                      prefixText: '₱ ',
-                      border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
-                      contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-                    ),
-                  ),
+                  TextField(controller: priceController, keyboardType: TextInputType.number, decoration: InputDecoration(hintText: 'e.g. 75', prefixText: '₱ ', border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)), contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12))),
                   const SizedBox(height: 16),
 
-                  // Description
+                  Text('Stock Quantity', style: GoogleFonts.poppins(fontWeight: FontWeight.w600, fontSize: 13)),
+                  const SizedBox(height: 6),
+                  TextField(controller: stockController, keyboardType: TextInputType.number, decoration: InputDecoration(hintText: 'e.g. 20', prefixIcon: const Icon(Icons.inventory_2_outlined, size: 20), border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)), contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12))),
+                  const SizedBox(height: 16),
+
                   Text('Description', style: GoogleFonts.poppins(fontWeight: FontWeight.w600, fontSize: 13)),
                   const SizedBox(height: 6),
-                  TextField(
-                    controller: descController,
-                    maxLines: 3,
-                    decoration: InputDecoration(
-                      hintText: 'Enter food details...',
-                      border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
-                      contentPadding: const EdgeInsets.all(12),
-                    ),
-                  ),
+                  TextField(controller: descController, maxLines: 3, decoration: InputDecoration(hintText: 'Enter food details...', border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)), contentPadding: const EdgeInsets.all(12))),
                   const SizedBox(height: 16),
 
-                  // Availability Switch
                   SwitchListTile(
                     contentPadding: EdgeInsets.zero,
                     title: Text('Available for ordering today', style: GoogleFonts.poppins(fontWeight: FontWeight.w500)),
@@ -688,44 +703,37 @@ class _AdminMenuManagementPageState extends State<AdminMenuManagementPage> {
                   ),
                   const SizedBox(height: 24),
 
-                  // Actions
                   Row(
                     children: [
                       Expanded(
                         child: ElevatedButton(
-                          onPressed: () {
-                            setState(() {
-                              _menuItems[index]['name'] = nameController.text;
-                              _menuItems[index]['price'] = priceController.text;
-                              _menuItems[index]['desc'] = descController.text;
-                              _menuItems[index]['category'] = selectedCategory;
-                              _menuItems[index]['available'] = isAvailable;
-                            });
-                            Navigator.pop(context);
-                            ScaffoldMessenger.of(context).showSnackBar(
-                              SnackBar(
-                                content: Text('Updated "${nameController.text}" successfully!'),
-                                backgroundColor: green,
-                              ),
-                            );
+                          onPressed: () async {
+                            if (nameController.text.isNotEmpty && priceController.text.isNotEmpty) {
+                              final newItem = MenuItemModel(
+                                id: '', // ID is auto-generated by Firestore
+                                name: nameController.text,
+                                category: selectedCategory,
+                                price: double.tryParse(priceController.text) ?? 0,
+                                description: descController.text,
+                                stock: int.tryParse(stockController.text) ?? 0,
+                                isAvailable: isAvailable,
+                              );
+                              await _addItem(newItem);
+                              if (context.mounted) {
+                                Navigator.pop(context);
+                                ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Added "${newItem.name}" successfully!'), backgroundColor: green));
+                              }
+                            }
                           },
-                          style: ElevatedButton.styleFrom(
-                            backgroundColor: green,
-                            foregroundColor: Colors.white,
-                            padding: const EdgeInsets.symmetric(vertical: 14),
-                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-                          ),
-                          child: const Text('Save Changes'),
+                          style: ElevatedButton.styleFrom(backgroundColor: adminPurple, foregroundColor: Colors.white, padding: const EdgeInsets.symmetric(vertical: 14), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10))),
+                          child: const Text('Add Item'),
                         ),
                       ),
                       const SizedBox(width: 12),
                       Expanded(
                         child: OutlinedButton(
                           onPressed: () => Navigator.pop(context),
-                          style: OutlinedButton.styleFrom(
-                            padding: const EdgeInsets.symmetric(vertical: 14),
-                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-                          ),
+                          style: OutlinedButton.styleFrom(padding: const EdgeInsets.symmetric(vertical: 14), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10))),
                           child: const Text('Cancel'),
                         ),
                       ),
@@ -740,12 +748,14 @@ class _AdminMenuManagementPageState extends State<AdminMenuManagementPage> {
     );
   }
 
-  void _showAddItemDialog(BuildContext context) {
-    final nameController = TextEditingController();
-    final priceController = TextEditingController();
-    final descController = TextEditingController();
-    String selectedCategory = 'Meals';
-    bool isAvailable = true;
+  // EDIT ITEM
+  void _showEditItemDialog(BuildContext context, MenuItemModel item) {
+    final nameController = TextEditingController(text: item.name);
+    final priceController = TextEditingController(text: item.price.toString());
+    final stockController = TextEditingController(text: item.stock.toString());
+    final descController = TextEditingController(text: item.description);
+    String selectedCategory = item.category;
+    bool isAvailable = item.isAvailable;
 
     showModalBottomSheet(
       context: context,
@@ -754,109 +764,55 @@ class _AdminMenuManagementPageState extends State<AdminMenuManagementPage> {
       builder: (context) => StatefulBuilder(
         builder: (context, setModalState) {
           return Container(
-            decoration: const BoxDecoration(
-              color: Colors.white,
-              borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-            ),
-            padding: EdgeInsets.only(
-              bottom: MediaQuery.of(context).viewInsets.bottom,
-            ),
+            decoration: const BoxDecoration(color: Colors.white, borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
+            padding: EdgeInsets.only(bottom: MediaQuery.of(context).viewInsets.bottom),
             child: SingleChildScrollView(
               padding: const EdgeInsets.all(24),
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  // Handle bar
-                  Center(
-                    child: Container(
-                      width: 40,
-                      height: 4,
-                      decoration: BoxDecoration(
-                        color: Colors.grey.shade300,
-                        borderRadius: BorderRadius.circular(2),
-                      ),
-                    ),
-                  ),
+                  Center(child: Container(width: 40, height: 4, decoration: BoxDecoration(color: Colors.grey.shade300, borderRadius: BorderRadius.circular(2)))),
                   const SizedBox(height: 20),
-                  
                   Row(
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
-                      Text(
-                        'Add New Menu Item',
-                        style: GoogleFonts.poppins(fontSize: 20, fontWeight: FontWeight.w700),
-                      ),
-                      IconButton(
-                        onPressed: () => Navigator.pop(context),
-                        icon: const Icon(Icons.close),
-                        color: Colors.grey.shade600,
-                      ),
+                      Text('Edit ${item.name}', style: GoogleFonts.poppins(fontSize: 20, fontWeight: FontWeight.w700)),
+                      IconButton(onPressed: () => Navigator.pop(context), icon: const Icon(Icons.close), color: Colors.grey.shade600),
                     ],
                   ),
                   const SizedBox(height: 20),
 
-                  // Food Name
                   Text('Food Name', style: GoogleFonts.poppins(fontWeight: FontWeight.w600, fontSize: 13)),
                   const SizedBox(height: 6),
-                  TextField(
-                    controller: nameController,
-                    decoration: InputDecoration(
-                      hintText: 'e.g. Chicken Meal',
-                      border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
-                      contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-                    ),
-                  ),
+                  TextField(controller: nameController, decoration: InputDecoration(hintText: 'e.g. Chicken Meal', border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)), contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12))),
                   const SizedBox(height: 16),
 
-                  // Category
                   Text('Category', style: GoogleFonts.poppins(fontWeight: FontWeight.w600, fontSize: 13)),
                   const SizedBox(height: 6),
                   DropdownButtonFormField<String>(
                     initialValue: selectedCategory,
-                    decoration: InputDecoration(
-                      border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
-                      contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-                    ),
-                    items: ['Meals', 'Snacks', 'Drinks', 'Desserts', 'Pastas']
-                        .map((cat) => DropdownMenuItem(value: cat, child: Text(cat)))
-                        .toList(),
-                    onChanged: (val) {
-                      if (val != null) setModalState(() => selectedCategory = val);
-                    },
+                    decoration: InputDecoration(border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)), contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12)),
+                    items: ['Meals', 'Snacks', 'Drinks', 'Desserts', 'Pastas'].map((cat) => DropdownMenuItem(value: cat, child: Text(cat))).toList(),
+                    onChanged: (val) { if (val != null) setModalState(() => selectedCategory = val); },
                   ),
                   const SizedBox(height: 16),
 
-                  // Price
                   Text('Price (₱)', style: GoogleFonts.poppins(fontWeight: FontWeight.w600, fontSize: 13)),
                   const SizedBox(height: 6),
-                  TextField(
-                    controller: priceController,
-                    keyboardType: TextInputType.number,
-                    decoration: InputDecoration(
-                      hintText: 'e.g. 75',
-                      prefixText: '₱ ',
-                      border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
-                      contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-                    ),
-                  ),
+                  TextField(controller: priceController, keyboardType: TextInputType.number, decoration: InputDecoration(hintText: 'e.g. 75', prefixText: '₱ ', border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)), contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12))),
                   const SizedBox(height: 16),
 
-                  // Description
+                  Text('Stock Quantity', style: GoogleFonts.poppins(fontWeight: FontWeight.w600, fontSize: 13)),
+                  const SizedBox(height: 6),
+                  TextField(controller: stockController, keyboardType: TextInputType.number, decoration: InputDecoration(hintText: 'e.g. 20', prefixIcon: const Icon(Icons.inventory_2_outlined, size: 20), border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)), contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12))),
+                  const SizedBox(height: 16),
+
                   Text('Description', style: GoogleFonts.poppins(fontWeight: FontWeight.w600, fontSize: 13)),
                   const SizedBox(height: 6),
-                  TextField(
-                    controller: descController,
-                    maxLines: 3,
-                    decoration: InputDecoration(
-                      hintText: 'Enter food details...',
-                      border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
-                      contentPadding: const EdgeInsets.all(12),
-                    ),
-                  ),
+                  TextField(controller: descController, maxLines: 3, decoration: InputDecoration(hintText: 'Enter food details...', border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)), contentPadding: const EdgeInsets.all(12))),
                   const SizedBox(height: 16),
 
-                  // Availability Switch
                   SwitchListTile(
                     contentPadding: EdgeInsets.zero,
                     title: Text('Available for ordering today', style: GoogleFonts.poppins(fontWeight: FontWeight.w500)),
@@ -866,48 +822,34 @@ class _AdminMenuManagementPageState extends State<AdminMenuManagementPage> {
                   ),
                   const SizedBox(height: 24),
 
-                  // Actions
                   Row(
                     children: [
                       Expanded(
                         child: ElevatedButton(
-                          onPressed: () {
-                            if (nameController.text.isNotEmpty && priceController.text.isNotEmpty) {
-                              setState(() {
-                                _menuItems.add({
-                                  'name': nameController.text,
-                                  'category': selectedCategory,
-                                  'price': priceController.text,
-                                  'desc': descController.text,
-                                  'available': isAvailable,
-                                });
-                              });
+                          onPressed: () async {
+                            final updatedItem = item.copyWith(
+                              name: nameController.text,
+                              category: selectedCategory,
+                              price: double.tryParse(priceController.text) ?? item.price,
+                              description: descController.text,
+                              stock: int.tryParse(stockController.text) ?? item.stock,
+                              isAvailable: isAvailable,
+                            );
+                            await _updateItem(item.id, updatedItem);
+                            if (context.mounted) {
                               Navigator.pop(context);
-                              ScaffoldMessenger.of(context).showSnackBar(
-                                SnackBar(
-                                  content: Text('Added "${nameController.text}" successfully!'),
-                                  backgroundColor: green,
-                                ),
-                              );
+                              ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Updated "${updatedItem.name}" successfully!'), backgroundColor: green));
                             }
                           },
-                          style: ElevatedButton.styleFrom(
-                            backgroundColor: adminPurple,
-                            foregroundColor: Colors.white,
-                            padding: const EdgeInsets.symmetric(vertical: 14),
-                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-                          ),
-                          child: const Text('Add Item'),
+                          style: ElevatedButton.styleFrom(backgroundColor: green, foregroundColor: Colors.white, padding: const EdgeInsets.symmetric(vertical: 14), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10))),
+                          child: const Text('Save Changes'),
                         ),
                       ),
                       const SizedBox(width: 12),
                       Expanded(
                         child: OutlinedButton(
                           onPressed: () => Navigator.pop(context),
-                          style: OutlinedButton.styleFrom(
-                            padding: const EdgeInsets.symmetric(vertical: 14),
-                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-                          ),
+                          style: OutlinedButton.styleFrom(padding: const EdgeInsets.symmetric(vertical: 14), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10))),
                           child: const Text('Cancel'),
                         ),
                       ),
@@ -1172,7 +1114,6 @@ class LineChartPainter extends CustomPainter {
       ..color = Colors.grey.shade200
       ..strokeWidth = 1;
 
-    // Draw horizontal grid lines
     for (int i = 1; i <= 4; i++) {
       final y = size.height * (i / 4);
       canvas.drawLine(Offset(0, y), Offset(size.width, y), gridPaint);
@@ -1195,7 +1136,6 @@ class LineChartPainter extends CustomPainter {
 
     canvas.drawPath(path, paint);
 
-    // Draw point markers
     final dotPaint = Paint()..color = const Color(0xFF5E35B1);
     final dotWhite = Paint()..color = Colors.white;
     final points = [
