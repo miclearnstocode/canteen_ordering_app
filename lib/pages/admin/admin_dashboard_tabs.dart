@@ -1,7 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:image_picker/image_picker.dart';
+import 'package:flutter/foundation.dart' show kIsWeb, Uint8List;
 import '../../models/menu_item_model.dart';
+import '../../helpers/image_picker_helper.dart';
+import '../../services/cloudinary_service.dart';
 
 class AdminDashboardPage extends StatelessWidget {
   const AdminDashboardPage({super.key});
@@ -411,7 +415,7 @@ class _AdminOrdersPageState extends State<AdminOrdersPage> {
 }
 
 // ==========================================
-// 3. ADMIN MENU MANAGEMENT PAGE (Firebase)
+// 3. ADMIN MENU MANAGEMENT PAGE (Firebase with Image)
 // ==========================================
 class AdminMenuManagementPage extends StatefulWidget {
   const AdminMenuManagementPage({super.key});
@@ -425,18 +429,37 @@ class _AdminMenuManagementPageState extends State<AdminMenuManagementPage> {
   final Color green = const Color(0xFF2E7D32);
   final CollectionReference _menuCollection = FirebaseFirestore.instance.collection('menu_items');
 
-  // Add new item to Firebase
-  Future<void> _addItem(MenuItemModel item) async {
-    await _menuCollection.add(item.toMap());
+  // Add new item with image (uploaded to Cloudinary, image_url saved to Firebase)
+  Future<void> _addItem(MenuItemModel item, XFile? imageFile) async {
+    String? imageUrl;
+    
+    // Upload image to Cloudinary if selected
+    if (imageFile != null) {
+      imageUrl = await CloudinaryService.uploadImage(imageFile, folder: 'menu_items');
+    }
+    
+    // Add item with image_url to Firebase Firestore
+    final itemWithImage = item.copyWith(imageUrl: imageUrl);
+    await _menuCollection.add(itemWithImage.toMap());
   }
 
-  // Edit item in Firebase
-  Future<void> _updateItem(String id, MenuItemModel updatedItem) async {
-    await _menuCollection.doc(id).update(updatedItem.toMap());
+  // Update item with image (uploaded to Cloudinary, image_url saved to Firebase)
+  Future<void> _updateItem(String id, MenuItemModel updatedItem, XFile? imageFile) async {
+    String? imageUrl = updatedItem.imageUrl;
+    
+    // Upload new image to Cloudinary if selected
+    if (imageFile != null) {
+      imageUrl = await CloudinaryService.uploadImage(imageFile, folder: 'menu_items');
+    }
+    
+    // Update item with image_url in Firebase Firestore
+    final itemWithImage = updatedItem.copyWith(imageUrl: imageUrl);
+    await _menuCollection.doc(id).update(itemWithImage.toMap());
   }
 
   // Delete item from Firebase
-  Future<void> _deleteItem(String id) async {
+  Future<void> _deleteItem(String id, String? imageUrl) async {
+    // Delete document from Firestore
     await _menuCollection.doc(id).delete();
   }
 
@@ -506,7 +529,6 @@ class _AdminMenuManagementPageState extends State<AdminMenuManagementPage> {
                           key: Key(doc.id),
                           direction: DismissDirection.endToStart,
                           confirmDismiss: (direction) async {
-                            // Show confirmation dialog
                             return await showDialog(
                               context: context,
                               builder: (BuildContext context) {
@@ -530,7 +552,7 @@ class _AdminMenuManagementPageState extends State<AdminMenuManagementPage> {
                             );
                           },
                           onDismissed: (direction) {
-                            _deleteItem(doc.id); // Delete from Firebase
+                            _deleteItem(doc.id, item.imageUrl);
                             ScaffoldMessenger.of(context).showSnackBar(
                               SnackBar(content: Text('Deleted "${item.name}"'), backgroundColor: Colors.red.shade400),
                             );
@@ -545,47 +567,106 @@ class _AdminMenuManagementPageState extends State<AdminMenuManagementPage> {
                             ),
                             child: const Icon(Icons.delete, color: Colors.white),
                           ),
-                          child: ListTile(
-                            contentPadding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
-                            onTap: () => _showEditItemDialog(context, item),
-                            leading: Container(
-                              width: 48, height: 48,
-                              decoration: BoxDecoration(color: adminPurple.withValues(alpha: 0.1), borderRadius: BorderRadius.circular(12)),
-                              child: Icon(
-                                item.category == 'Drinks' ? Icons.local_cafe : 
-                                item.category == 'Snacks' ? Icons.fastfood : 
-                                Icons.lunch_dining,
-                                color: adminPurple, size: 24,
+                          child: Material(
+                            color: Colors.transparent,
+                            borderRadius: BorderRadius.circular(12),
+                            child: ListTile(
+                              contentPadding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+                              onTap: () => _showEditItemDialog(context, item),
+                              leading: Container(
+                                width: 56,
+                                height: 56,
+                                decoration: BoxDecoration(
+                                  borderRadius: BorderRadius.circular(12),
+                                  color: Colors.grey.shade100,
+                                  image: item.imageUrl != null
+                                      ? DecorationImage(
+                                          image: NetworkImage(item.imageUrl!),
+                                          fit: BoxFit.cover,
+                                        )
+                                      : null,
+                                ),
+                                child: item.imageUrl == null
+                                    ? Icon(
+                                        item.category == 'Drinks' ? Icons.local_cafe : 
+                                        item.category == 'Snacks' ? Icons.fastfood : 
+                                        Icons.lunch_dining,
+                                        color: adminPurple,
+                                        size: 28,
+                                      )
+                                    : null,
+                              ),
+                              title: Text(
+                                item.name,
+                                style: GoogleFonts.poppins(
+                                  fontWeight: FontWeight.w600,
+                                  fontSize: 15,
+                                ),
+                              ),
+                              subtitle: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    '${item.category} • Stock: ${item.stock}',
+                                    style: GoogleFonts.poppins(
+                                      fontSize: 12,
+                                      color: Colors.grey.shade600,
+                                    ),
+                                  ),
+                                  Text(
+                                    item.description,
+                                    style: GoogleFonts.poppins(
+                                      fontSize: 12,
+                                      color: Colors.grey.shade500,
+                                    ),
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                  ),
+                                ],
+                              ),
+                              trailing: Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  Column(
+                                    crossAxisAlignment: CrossAxisAlignment.end,
+                                    mainAxisAlignment: MainAxisAlignment.center,
+                                    children: [
+                                      Text(
+                                        '₱${item.price.toStringAsFixed(0)}',
+                                        style: GoogleFonts.poppins(
+                                          fontWeight: FontWeight.bold,
+                                          fontSize: 16,
+                                          color: adminPurple,
+                                        ),
+                                      ),
+                                      Container(
+                                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                                        decoration: BoxDecoration(
+                                          color: item.isAvailable ? Colors.green.shade50 : Colors.red.shade50,
+                                          borderRadius: BorderRadius.circular(6),
+                                        ),
+                                        child: Text(
+                                          item.isAvailable ? 'Available' : 'Unavailable',
+                                          style: GoogleFonts.poppins(
+                                            fontSize: 10,
+                                            fontWeight: FontWeight.w600,
+                                            color: item.isAvailable ? Colors.green.shade700 : Colors.red.shade700,
+                                          ),
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                  const SizedBox(width: 8),
+                                  Icon(
+                                    Icons.edit,
+                                    color: Colors.grey.shade400,
+                                    size: 20,
+                                  ),
+                                ],
                               ),
                             ),
-                            title: Text(item.name, style: GoogleFonts.poppins(fontWeight: FontWeight.w600, fontSize: 15)),
-                            subtitle: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Text('${item.category} • Stock: ${item.stock}', style: GoogleFonts.poppins(fontSize: 12, color: Colors.grey.shade600)),
-                                Text(item.description, style: GoogleFonts.poppins(fontSize: 12, color: Colors.grey.shade500), maxLines: 1, overflow: TextOverflow.ellipsis),
-                              ],
-                            ),
-                            trailing: Row(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                Column(
-                                  crossAxisAlignment: CrossAxisAlignment.end,
-                                  mainAxisAlignment: MainAxisAlignment.center,
-                                  children: [
-                                    Text('₱${item.price.toStringAsFixed(0)}', style: GoogleFonts.poppins(fontWeight: FontWeight.bold, fontSize: 16, color: adminPurple)),
-                                    Container(
-                                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-                                      decoration: BoxDecoration(color: item.isAvailable ? Colors.green.shade50 : Colors.red.shade50, borderRadius: BorderRadius.circular(6)),
-                                      child: Text(item.isAvailable ? 'Available' : 'Unavailable', style: GoogleFonts.poppins(fontSize: 10, fontWeight: FontWeight.w600, color: item.isAvailable ? Colors.green.shade700 : Colors.red.shade700)),
-                                    ),
-                                  ],
-                                ),
-                                const SizedBox(width: 8),
-                                Icon(Icons.edit, color: Colors.grey.shade400, size: 20),
-                              ],
-                            ),
                           ),
+                                                  
                         );
                       },
                     );
@@ -629,7 +710,7 @@ class _AdminMenuManagementPageState extends State<AdminMenuManagementPage> {
     );
   }
 
-  // ADD ITEM
+  // ADD ITEM with Image (Web Compatible)
   void _showAddItemDialog(BuildContext context) {
     final nameController = TextEditingController();
     final priceController = TextEditingController();
@@ -637,6 +718,8 @@ class _AdminMenuManagementPageState extends State<AdminMenuManagementPage> {
     final descController = TextEditingController();
     String selectedCategory = 'Meals';
     bool isAvailable = true;
+    XFile? selectedImage;
+    bool isUploading = false;
 
     showModalBottomSheet(
       context: context,
@@ -664,6 +747,96 @@ class _AdminMenuManagementPageState extends State<AdminMenuManagementPage> {
                   ),
                   const SizedBox(height: 20),
 
+                  Container(
+                    width: double.infinity,
+                    height: 150,
+                    decoration: BoxDecoration(
+                      color: Colors.grey.shade50,
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(color: Colors.grey.shade300),
+                    ),
+                    child: selectedImage != null
+                        ? Stack(
+                            children: [
+                              ClipRRect(
+                                borderRadius: BorderRadius.circular(12),
+                                child: FutureBuilder<Uint8List>(
+                                  future: selectedImage!.readAsBytes(),
+                                  builder: (context, snapshot) {
+                                    if (snapshot.hasData && snapshot.data != null) {
+                                      return Image.memory(
+                                        snapshot.data!,
+                                        width: double.infinity,
+                                        height: 150,
+                                        fit: BoxFit.cover,
+                                      );
+                                    } else if (snapshot.hasError) {
+                                      return Container(
+                                        color: Colors.grey.shade200,
+                                        child: const Icon(Icons.broken_image, size: 50, color: Colors.grey),
+                                      );
+                                    } else {
+                                      return const Center(
+                                        child: CircularProgressIndicator(),
+                                      );
+                                    }
+                                  },
+                                ),
+                              ),
+                              Positioned(
+                                top: 8,
+                                right: 8,
+                                child: CircleAvatar(
+                                  backgroundColor: Colors.black.withValues(alpha: 0.7),
+                                  radius: 18,
+                                  child: IconButton(
+                                    icon: const Icon(Icons.close, color: Colors.white, size: 16),
+                                    onPressed: () {
+                                      setModalState(() => selectedImage = null);
+                                    },
+                                    padding: EdgeInsets.zero,
+                                  ),
+                                ),
+                              ),
+                            ],
+                          )
+                        : InkWell(
+                            onTap: () async {
+                              final XFile? image = await ImagePickerHelper.pickImage();
+                              if (image != null) {
+                                setModalState(() => selectedImage = image);
+                              }
+                            },
+                            child: Column(
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              children: [
+                                Icon(
+                                  kIsWeb ? Icons.cloud_upload : Icons.photo_library,
+                                  size: 48,
+                                  color: Colors.grey.shade400,
+                                ),
+                                const SizedBox(height: 8),
+                                Text(
+                                  kIsWeb ? 'Click to select image' : 'Tap to upload image',
+                                  style: GoogleFonts.poppins(
+                                    color: Colors.grey.shade500,
+                                    fontSize: 14,
+                                  ),
+                                ),
+                                Text(
+                                  'Supports PNG, JPG, GIF, WEBP',
+                                  style: GoogleFonts.poppins(
+                                    color: Colors.grey.shade400,
+                                    fontSize: 12,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                  ),
+                                    
+                  const SizedBox(height: 16),
+
                   Text('Food Name', style: GoogleFonts.poppins(fontWeight: FontWeight.w600, fontSize: 13)),
                   const SizedBox(height: 6),
                   TextField(controller: nameController, decoration: InputDecoration(hintText: 'e.g. Chicken Meal', border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)), contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12))),
@@ -707,33 +880,64 @@ class _AdminMenuManagementPageState extends State<AdminMenuManagementPage> {
                     children: [
                       Expanded(
                         child: ElevatedButton(
-                          onPressed: () async {
-                            if (nameController.text.isNotEmpty && priceController.text.isNotEmpty) {
-                              final newItem = MenuItemModel(
-                                id: '', // ID is auto-generated by Firestore
-                                name: nameController.text,
-                                category: selectedCategory,
-                                price: double.tryParse(priceController.text) ?? 0,
-                                description: descController.text,
-                                stock: int.tryParse(stockController.text) ?? 0,
-                                isAvailable: isAvailable,
-                              );
-                              await _addItem(newItem);
-                              if (context.mounted) {
-                                Navigator.pop(context);
-                                ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Added "${newItem.name}" successfully!'), backgroundColor: green));
-                              }
-                            }
-                          },
-                          style: ElevatedButton.styleFrom(backgroundColor: adminPurple, foregroundColor: Colors.white, padding: const EdgeInsets.symmetric(vertical: 14), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10))),
-                          child: const Text('Add Item'),
+                          onPressed: isUploading
+                              ? null
+                              : () async {
+                                  if (nameController.text.isNotEmpty && priceController.text.isNotEmpty) {
+                                    setModalState(() => isUploading = true);
+                                    try {
+                                      final newItem = MenuItemModel(
+                                        id: '',
+                                        name: nameController.text,
+                                        category: selectedCategory,
+                                        price: double.tryParse(priceController.text) ?? 0,
+                                        description: descController.text,
+                                        stock: int.tryParse(stockController.text) ?? 0,
+                                        isAvailable: isAvailable,
+                                      );
+                                      await _addItem(newItem, selectedImage);
+                                      if (context.mounted) {
+                                        Navigator.pop(context);
+                                        ScaffoldMessenger.of(context).showSnackBar(
+                                          SnackBar(content: Text('Added "${newItem.name}" successfully!'), backgroundColor: green),
+                                        );
+                                      }
+                                    } catch (e) {
+                                      setModalState(() => isUploading = false);
+                                      if (context.mounted) {
+                                        ScaffoldMessenger.of(context).showSnackBar(
+                                          SnackBar(content: Text('Error adding item: $e'), backgroundColor: Colors.red),
+                                        );
+                                      }
+                                    }
+                                  }
+                                },
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: adminPurple,
+                            foregroundColor: Colors.white,
+                            padding: const EdgeInsets.symmetric(vertical: 14),
+                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                          ),
+                          child: isUploading
+                              ? const SizedBox(
+                                  height: 20,
+                                  width: 20,
+                                  child: CircularProgressIndicator(
+                                    color: Colors.white,
+                                    strokeWidth: 2,
+                                  ),
+                                )
+                              : const Text('Add Item'),
                         ),
                       ),
                       const SizedBox(width: 12),
                       Expanded(
                         child: OutlinedButton(
-                          onPressed: () => Navigator.pop(context),
-                          style: OutlinedButton.styleFrom(padding: const EdgeInsets.symmetric(vertical: 14), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10))),
+                          onPressed: isUploading ? null : () => Navigator.pop(context),
+                          style: OutlinedButton.styleFrom(
+                            padding: const EdgeInsets.symmetric(vertical: 14),
+                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                          ),
                           child: const Text('Cancel'),
                         ),
                       ),
@@ -748,7 +952,7 @@ class _AdminMenuManagementPageState extends State<AdminMenuManagementPage> {
     );
   }
 
-  // EDIT ITEM
+  // EDIT ITEM with Image (Web Compatible)
   void _showEditItemDialog(BuildContext context, MenuItemModel item) {
     final nameController = TextEditingController(text: item.name);
     final priceController = TextEditingController(text: item.price.toString());
@@ -756,6 +960,9 @@ class _AdminMenuManagementPageState extends State<AdminMenuManagementPage> {
     final descController = TextEditingController(text: item.description);
     String selectedCategory = item.category;
     bool isAvailable = item.isAvailable;
+    XFile? selectedImage;
+    bool isUploading = false;
+    String? existingImageUrl = item.imageUrl;
 
     showModalBottomSheet(
       context: context,
@@ -783,6 +990,131 @@ class _AdminMenuManagementPageState extends State<AdminMenuManagementPage> {
                   ),
                   const SizedBox(height: 20),
 
+                  // Image Upload Section (Web Compatible)
+                  Container(
+                    width: double.infinity,
+                    height: 150,
+                    decoration: BoxDecoration(
+                      color: Colors.grey.shade50,
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(color: Colors.grey.shade300),
+                    ),
+                    child: selectedImage != null
+                        ? Stack(
+                            children: [
+                              ClipRRect(
+                                borderRadius: BorderRadius.circular(12),
+                                child: FutureBuilder<Uint8List>(
+                                  future: selectedImage!.readAsBytes(),
+                                  builder: (context, snapshot) {
+                                    if (snapshot.hasData && snapshot.data != null) {
+                                      return Image.memory(
+                                        snapshot.data!,
+                                        width: double.infinity,
+                                        height: 150,
+                                        fit: BoxFit.cover,
+                                      );
+                                    } else if (snapshot.hasError) {
+                                      return Container(
+                                        color: Colors.grey.shade200,
+                                        child: const Icon(Icons.broken_image, size: 50, color: Colors.grey),
+                                      );
+                                    } else {
+                                      return const Center(
+                                        child: CircularProgressIndicator(),
+                                      );
+                                    }
+                                  },
+                                ),
+                              ),
+                              Positioned(
+                                top: 8,
+                                right: 8,
+                                child: CircleAvatar(
+                                  backgroundColor: Colors.black.withValues(alpha: 0.7),
+                                  radius: 18,
+                                  child: IconButton(
+                                    icon: const Icon(Icons.close, color: Colors.white, size: 16),
+                                    onPressed: () {
+                                      setModalState(() => selectedImage = null);
+                                    },
+                                    padding: EdgeInsets.zero,
+                                  ),
+                                ),
+                              ),
+                            ],
+                          )
+                        : existingImageUrl != null
+                            ? Stack(
+                                children: [
+                                  ClipRRect(
+                                    borderRadius: BorderRadius.circular(12),
+                                    child: Image.network(
+                                      existingImageUrl!,
+                                      width: double.infinity,
+                                      height: 150,
+                                      fit: BoxFit.cover,
+                                      errorBuilder: (context, error, stackTrace) {
+                                        return Container(
+                                          color: Colors.grey.shade200,
+                                          child: const Icon(Icons.broken_image, size: 50, color: Colors.grey),
+                                        );
+                                      },
+                                    ),
+                                  ),
+                                  Positioned(
+                                    top: 8,
+                                    right: 8,
+                                    child: CircleAvatar(
+                                      backgroundColor: Colors.black.withValues(alpha: 0.7),
+                                      radius: 18,
+                                      child: IconButton(
+                                        icon: const Icon(Icons.close, color: Colors.white, size: 16),
+                                        onPressed: () {
+                                          setModalState(() => existingImageUrl = null);
+                                        },
+                                        padding: EdgeInsets.zero,
+                                      ),
+                                    ),
+                                  ),
+                                ],
+                              )
+                            : InkWell(
+                                onTap: () async {
+                                  final XFile? image = await ImagePickerHelper.pickImage();
+                                  if (image != null) {
+                                    setModalState(() => selectedImage = image);
+                                  }
+                                },
+                                child: Column(
+                                  mainAxisAlignment: MainAxisAlignment.center,
+                                  children: [
+                                    Icon(
+                                      kIsWeb ? Icons.cloud_upload : Icons.photo_library,
+                                      size: 48,
+                                      color: Colors.grey.shade400,
+                                    ),
+                                    const SizedBox(height: 8),
+                                    Text(
+                                      kIsWeb ? 'Click to select image' : 'Tap to upload image',
+                                      style: GoogleFonts.poppins(
+                                        color: Colors.grey.shade500,
+                                        fontSize: 14,
+                                      ),
+                                    ),
+                                    Text(
+                                      'Recommended: 800x800px',
+                                      style: GoogleFonts.poppins(
+                                        color: Colors.grey.shade400,
+                                        fontSize: 12,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                  ),
+                  const SizedBox(height: 16),
+
                   Text('Food Name', style: GoogleFonts.poppins(fontWeight: FontWeight.w600, fontSize: 13)),
                   const SizedBox(height: 6),
                   TextField(controller: nameController, decoration: InputDecoration(hintText: 'e.g. Chicken Meal', border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)), contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12))),
@@ -826,30 +1158,62 @@ class _AdminMenuManagementPageState extends State<AdminMenuManagementPage> {
                     children: [
                       Expanded(
                         child: ElevatedButton(
-                          onPressed: () async {
-                            final updatedItem = item.copyWith(
-                              name: nameController.text,
-                              category: selectedCategory,
-                              price: double.tryParse(priceController.text) ?? item.price,
-                              description: descController.text,
-                              stock: int.tryParse(stockController.text) ?? item.stock,
-                              isAvailable: isAvailable,
-                            );
-                            await _updateItem(item.id, updatedItem);
-                            if (context.mounted) {
-                              Navigator.pop(context);
-                              ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Updated "${updatedItem.name}" successfully!'), backgroundColor: green));
-                            }
-                          },
-                          style: ElevatedButton.styleFrom(backgroundColor: green, foregroundColor: Colors.white, padding: const EdgeInsets.symmetric(vertical: 14), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10))),
-                          child: const Text('Save Changes'),
+                          onPressed: isUploading
+                              ? null
+                              : () async {
+                                  final updatedItem = item.copyWith(
+                                    name: nameController.text,
+                                    category: selectedCategory,
+                                    price: double.tryParse(priceController.text) ?? item.price,
+                                    description: descController.text,
+                                    stock: int.tryParse(stockController.text) ?? item.stock,
+                                    isAvailable: isAvailable,
+                                  );
+                                  
+                                  setModalState(() => isUploading = true);
+                                  try {
+                                    await _updateItem(item.id, updatedItem, selectedImage);
+                                    if (context.mounted) {
+                                      Navigator.pop(context);
+                                      ScaffoldMessenger.of(context).showSnackBar(
+                                        SnackBar(content: Text('Updated "${updatedItem.name}" successfully!'), backgroundColor: green),
+                                      );
+                                    }
+                                  } catch (e) {
+                                    setModalState(() => isUploading = false);
+                                    if (context.mounted) {
+                                      ScaffoldMessenger.of(context).showSnackBar(
+                                        SnackBar(content: Text('Error updating item: $e'), backgroundColor: Colors.red),
+                                      );
+                                    }
+                                  }
+                                },
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: green,
+                            foregroundColor: Colors.white,
+                            padding: const EdgeInsets.symmetric(vertical: 14),
+                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                          ),
+                          child: isUploading
+                              ? const SizedBox(
+                                  height: 20,
+                                  width: 20,
+                                  child: CircularProgressIndicator(
+                                    color: Colors.white,
+                                    strokeWidth: 2,
+                                  ),
+                                )
+                              : const Text('Save Changes'),
                         ),
                       ),
                       const SizedBox(width: 12),
                       Expanded(
                         child: OutlinedButton(
-                          onPressed: () => Navigator.pop(context),
-                          style: OutlinedButton.styleFrom(padding: const EdgeInsets.symmetric(vertical: 14), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10))),
+                          onPressed: isUploading ? null : () => Navigator.pop(context),
+                          style: OutlinedButton.styleFrom(
+                            padding: const EdgeInsets.symmetric(vertical: 14),
+                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                          ),
                           child: const Text('Cancel'),
                         ),
                       ),

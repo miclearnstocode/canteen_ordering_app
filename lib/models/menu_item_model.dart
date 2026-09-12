@@ -16,6 +16,7 @@ class MenuItemModel {
   String description;
   int stock;
   bool isAvailable;
+  String? imageUrl;
 
   MenuItemModel({
     required this.id,
@@ -25,6 +26,7 @@ class MenuItemModel {
     required this.description,
     required this.stock,
     this.isAvailable = true,
+    this.imageUrl,
   });
 
   // Copy with method for updating
@@ -35,6 +37,7 @@ class MenuItemModel {
     String? description,
     int? stock,
     bool? isAvailable,
+    String? imageUrl,
   }) {
     return MenuItemModel(
       id: id,
@@ -44,10 +47,11 @@ class MenuItemModel {
       description: description ?? this.description,
       stock: stock ?? this.stock,
       isAvailable: isAvailable ?? this.isAvailable,
+      imageUrl: imageUrl ?? this.imageUrl,
     );
   }
 
-  // Convert from Firestore (Optional for later real backend implementation)
+  // Convert from Firestore
   factory MenuItemModel.fromMap(String id, Map<String, dynamic> map) {
     return MenuItemModel(
       id: id,
@@ -57,10 +61,11 @@ class MenuItemModel {
       description: map['description'] ?? '',
       stock: map['stock'] ?? 0,
       isAvailable: map['isAvailable'] ?? true,
+      imageUrl: (map['image_url'] ?? map['imageUrl']) as String?,
     );
   }
 
-  // Convert to Map for Firestore (Optional for later real backend implementation)
+  // Convert to Map for Firestore
   Map<String, dynamic> toMap() {
     return {
       'name': name,
@@ -69,6 +74,8 @@ class MenuItemModel {
       'description': description,
       'stock': stock,
       'isAvailable': isAvailable,
+      'image_url': imageUrl,
+      'imageUrl': imageUrl,
     };
   }
 }

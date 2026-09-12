@@ -35,7 +35,7 @@ dependencies:
   firebase_core: ^2.24.2
   firebase_auth: ^4.16.0
   cloud_firestore: ^4.14.0
-  
+
   # UI
   google_fonts: ^6.1.0
   qr_flutter: ^4.1.0
@@ -44,11 +44,14 @@ dependencies:
   qr_code_scanner: ^1.0.1
   
   # Utilities
+  http: ^1.2.0
   image_picker: ^1.0.4
   share_plus: ^7.2.1
   image_gallery_saver: ^2.0.3
   intl: ^0.18.1
   shared_preferences: ^2.2.2
+  cached_network_image: ^3.3.0
+  file_picker: ^6.1.1
   
 dev_dependencies:
   flutter_test:

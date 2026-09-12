@@ -18,7 +18,6 @@ class _RegisterPageState extends State<RegisterPage> {
   final _fullNameController = TextEditingController();
   final _passwordController = TextEditingController();
   final _confirmPasswordController = TextEditingController();
-  UserRole _selectedRole = UserRole.user;
   bool _loading = false;
   bool _obscurePassword = true;
   bool _obscureConfirmPassword = true;
@@ -61,7 +60,7 @@ class _RegisterPageState extends State<RegisterPage> {
         _emailController.text.trim(),
         _passwordController.text.trim(),
         _fullNameController.text.trim(), // This becomes the username
-        _selectedRole,
+        UserRole.user, // Always register as regular user
       );
 
       if (mounted && user != null) {
@@ -335,53 +334,6 @@ class _RegisterPageState extends State<RegisterPage> {
                         return null;
                       },
                     ),
-                    const SizedBox(height: 20),
-                    
-                    // Role Selection
-                    Text(
-                      'Register as',
-                      style: GoogleFonts.inter(
-                        fontSize: 14,
-                        fontWeight: FontWeight.w600,
-                        color: Colors.grey[800],
-                      ),
-                    ),
-                    const SizedBox(height: 8),
-                    Container(
-                      padding: const EdgeInsets.all(4),
-                      decoration: BoxDecoration(
-                        color: Colors.grey.shade50,
-                        borderRadius: BorderRadius.circular(14),
-                      ),
-                      child: Row(
-                        children: [
-                          Expanded(
-                            child: _RoleButton(
-                              label: 'User',
-                              icon: Icons.person_outline,
-                              isSelected: _selectedRole == UserRole.user,
-                              onTap: () {
-                                setState(() {
-                                  _selectedRole = UserRole.user;
-                                });
-                              },
-                            ),
-                          ),
-                          Expanded(
-                            child: _RoleButton(
-                              label: 'Canteen Admin',
-                              icon: Icons.storefront_outlined,
-                              isSelected: _selectedRole == UserRole.admin,
-                              onTap: () {
-                                setState(() {
-                                  _selectedRole = UserRole.admin;
-                                });
-                              },
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
                     const SizedBox(height: 32),
                     
                     // Sign Up Button
@@ -443,53 +395,6 @@ class _RegisterPageState extends State<RegisterPage> {
               ),
             ],
           ),
-        ),
-      ),
-    );
-  }
-}
-
-class _RoleButton extends StatelessWidget {
-  final String label;
-  final IconData icon;
-  final bool isSelected;
-  final VoidCallback onTap;
-
-  const _RoleButton({
-    required this.label,
-    required this.icon,
-    required this.isSelected,
-    required this.onTap,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return GestureDetector(
-      onTap: onTap,
-      child: Container(
-        padding: const EdgeInsets.symmetric(vertical: 12),
-        decoration: BoxDecoration(
-          color: isSelected ? const Color(0xFF2E7D32) : Colors.transparent,
-          borderRadius: BorderRadius.circular(12),
-        ),
-        child: Row(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Icon(
-              icon,
-              color: isSelected ? Colors.white : Colors.grey[600],
-              size: 20,
-            ),
-            const SizedBox(width: 8),
-            Text(
-              label,
-              style: GoogleFonts.inter(
-                fontWeight: isSelected ? FontWeight.w600 : FontWeight.w400,
-                color: isSelected ? Colors.white : Colors.grey[600],
-                fontSize: 14,
-              ),
-            ),
-          ],
         ),
       ),
     );
