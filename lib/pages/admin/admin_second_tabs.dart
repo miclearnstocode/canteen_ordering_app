@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
+import '../../models/user_model.dart';
+import '../../services/admin_account_service.dart';
 
 // ==========================================
 // 6. ADMIN REDEMPTION PAGE
@@ -463,7 +465,7 @@ class AdminReportsPage extends StatelessWidget {
 }
 
 // ==========================================
-// 9. ADMIN ACCOUNTS PAGE
+// 9. ADMIN ACCOUNTS PAGE (REWORKED)
 // ==========================================
 class AdminAccountsPage extends StatefulWidget {
   const AdminAccountsPage({super.key});
@@ -475,16 +477,301 @@ class AdminAccountsPage extends StatefulWidget {
 class _AdminAccountsPageState extends State<AdminAccountsPage> {
   final Color adminPurple = const Color(0xFF5E35B1);
   final Color green = const Color(0xFF2E7D32);
-  final _searchController = TextEditingController();
-  int _currentPage = 1;
+  final Color amber = const Color(0xFFF9A825);
 
-  final List<Map<String, dynamic>> _students = [
-    {'name': 'Marianne Santos', 'id': '2023-12345', 'course': 'BSIT - 2A', 'points': '125', 'orders': '18', 'status': 'Active'},
-    {'name': 'John Dela Cruz', 'id': '2023-12346', 'course': 'BSIT - 2A', 'points': '80', 'orders': '15', 'status': 'Active'},
-    {'name': 'Andrea Reyes', 'id': '2023-12347', 'course': 'BSIT - 1B', 'points': '45', 'orders': '9', 'status': 'Active'},
-    {'name': 'Mark Garcia', 'id': '2023-12348', 'course': 'BSIT - 3A', 'points': '60', 'orders': '12', 'status': 'Active'},
-    {'name': 'Kyle Villanueva', 'id': '2023-12349', 'course': 'BSIT - 1A', 'points': '30', 'orders': '6', 'status': 'Active'},
-  ];
+  final _searchController = TextEditingController();
+  final _service = AdminAccountService();
+
+  // ---- Create-account dialog ----
+  Future<void> _showCreateAccountDialog() async {
+    final nameCtrl = TextEditingController();
+    final emailCtrl = TextEditingController();
+    final idCtrl = TextEditingController();
+    final courseCtrl = TextEditingController();
+    final pwCtrl = TextEditingController();
+
+    await showDialog(
+      context: context,
+      builder: (ctx) {
+        bool obscurePassword = true; // local visibility state
+
+        return StatefulBuilder(
+          builder: (ctx, setDialogState) => AlertDialog(
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
+            title: Text('Create Student Account',
+                style: GoogleFonts.poppins(fontWeight: FontWeight.bold)),
+            content: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  _field(nameCtrl, 'Full Name', Icons.person_outline),
+                  _field(emailCtrl, 'Email', Icons.email_outlined),
+                  _field(idCtrl, 'Student ID', Icons.badge_outlined),
+                  _field(courseCtrl, 'Course / Section', Icons.school_outlined),
+                  _field(
+                    pwCtrl,
+                    'Temporary Password',
+                    Icons.lock_outline,
+                    obscure: obscurePassword,
+                    suffix: IconButton(
+                      icon: Icon(
+                        obscurePassword
+                            ? Icons.visibility_off_outlined
+                            : Icons.visibility_outlined,
+                        size: 20,
+                        color: Colors.grey.shade600,
+                      ),
+                      onPressed: () {
+                        setDialogState(() {
+                          obscurePassword = !obscurePassword;
+                        });
+                      },
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  Text(
+                    'The account will be marked PENDING. Release the credentials '
+                    'only when the student inquires at the counter.',
+                    style: GoogleFonts.poppins(fontSize: 11, color: Colors.grey.shade600),
+                  ),
+                ],
+              ),
+            ),
+            actions: [
+              TextButton(
+                  onPressed: () => Navigator.pop(ctx),
+                  child: const Text('Cancel')),
+              ElevatedButton(
+                style: ElevatedButton.styleFrom(
+                    backgroundColor: adminPurple, foregroundColor: Colors.white),
+                onPressed: () async {
+                  if (nameCtrl.text.isEmpty ||
+                      emailCtrl.text.isEmpty ||
+                      idCtrl.text.isEmpty ||
+                      pwCtrl.text.isEmpty) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(content: Text('Please fill in all fields')),
+                    );
+                    return;
+                  }
+                  try {
+                    await _service.createPendingAccount(
+                      fullName: nameCtrl.text.trim(),
+                      email: emailCtrl.text.trim(),
+                      studentId: idCtrl.text.trim(),
+                      course: courseCtrl.text.trim(),
+                      tempPassword: pwCtrl.text.trim(),
+                    );
+                    if (mounted) Navigator.pop(ctx);
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(
+                          content: Text('Pending account for ${nameCtrl.text} created'),
+                          backgroundColor: green),
+                    );
+                  } catch (e) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(content: Text('Error: $e')),
+                    );
+                  }
+                },
+                child: const Text('Create'),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _field(
+    TextEditingController c,
+    String label,
+    IconData icon, {
+    bool obscure = false,
+    Widget? suffix,
+  }) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 10),
+      child: TextField(
+        controller: c,
+        obscureText: obscure,
+        decoration: InputDecoration(
+          labelText: label,
+          prefixIcon: Icon(icon, size: 18),
+          suffixIcon: suffix,
+          border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
+          contentPadding:
+              const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+        ),
+      ),
+    );
+  }
+
+  // ---- Release credentials ----
+  Future<void> _releaseAccount(AppUser user) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
+        title: Text('Release Credentials',
+            style: GoogleFonts.poppins(fontWeight: FontWeight.bold)),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text('Hand these credentials to the student:',
+                style: GoogleFonts.poppins(fontSize: 12)),
+            const SizedBox(height: 10),
+            _credRow('Email', user.email),
+            _credRow('Password', user.tempPassword ?? '(not set)'),
+            _credRow('Student ID', user.studentId ?? '-'),
+            const SizedBox(height: 8),
+            Text('Once released, the student can log in.',
+                style: GoogleFonts.poppins(
+                    fontSize: 11, color: Colors.red.shade400)),
+          ],
+        ),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('Cancel')),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(
+                backgroundColor: green, foregroundColor: Colors.white),
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Mark as Released'),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed == true) {
+      await _service.releaseAccount(user.uid);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+              content: Text('${user.displayName} can now log in'),
+              backgroundColor: green),
+        );
+      }
+    }
+  }
+
+  Widget _credRow(String label, String value) => Padding(
+        padding: const EdgeInsets.only(bottom: 4),
+        child: Row(
+          children: [
+            SizedBox(
+                width: 90,
+                child: Text('$label:',
+                    style: GoogleFonts.poppins(
+                        fontSize: 12, color: Colors.grey.shade600))),
+            Expanded(
+              child: SelectableText(value,
+                  style: GoogleFonts.poppins(
+                      fontSize: 12, fontWeight: FontWeight.w600)),
+            ),
+          ],
+        ),
+      );
+
+  // ---- Add credit ----
+  Future<void> _showAddCreditDialog(AppUser user) async {
+    final amountCtrl = TextEditingController();
+    final noteCtrl = TextEditingController();
+
+    await showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
+        title: Text('Add Credit — ${user.displayName}',
+            style: GoogleFonts.poppins(fontWeight: FontWeight.bold, fontSize: 16)),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Container(
+              padding: const EdgeInsets.all(10),
+              decoration: BoxDecoration(
+                color: green.withValues(alpha: 0.08),
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: Row(
+                children: [
+                  Icon(Icons.account_balance_wallet, color: green, size: 18),
+                  const SizedBox(width: 8),
+                  Text('Current balance: ₱${user.credits.toStringAsFixed(2)}',
+                      style: GoogleFonts.poppins(
+                          fontWeight: FontWeight.w600, fontSize: 13)),
+                ],
+              ),
+            ),
+            const SizedBox(height: 14),
+            TextField(
+              controller: amountCtrl,
+              keyboardType:
+                  const TextInputType.numberWithOptions(decimal: true),
+              decoration: InputDecoration(
+                labelText: 'Amount received (₱)',
+                prefixText: '₱ ',
+                helperText: '1 credit = 1 peso',
+                border:
+                    OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
+              ),
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: noteCtrl,
+              decoration: InputDecoration(
+                labelText: 'Note (optional)',
+                hintText: 'e.g. Cash top-up at counter',
+                border:
+                    OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: const Text('Cancel')),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(
+                backgroundColor: green, foregroundColor: Colors.white),
+            onPressed: () async {
+              final amount = double.tryParse(amountCtrl.text.trim()) ?? 0;
+              if (amount <= 0) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(content: Text('Enter a valid amount')),
+                );
+                return;
+              }
+              try {
+                await _service.addCredits(
+                  uid: user.uid,
+                  amountInPesos: amount,
+                  note: noteCtrl.text.trim(),
+                );
+                if (mounted) Navigator.pop(ctx);
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(
+                    content: Text(
+                        'Added ₱${amount.toStringAsFixed(2)} to ${user.displayName}'),
+                    backgroundColor: green,
+                  ),
+                );
+              } catch (e) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(content: Text('Error: $e')),
+                );
+              }
+            },
+            child: const Text('Add Credits'),
+          ),
+        ],
+      ),
+    );
+  }
 
   @override
   void dispose() {
@@ -495,18 +782,29 @@ class _AdminAccountsPageState extends State<AdminAccountsPage> {
   @override
   Widget build(BuildContext context) {
     final query = _searchController.text.toLowerCase();
-    final filtered = _students.where((s) =>
-        (s['name'] as String).toLowerCase().contains(query) ||
-        (s['course'] as String).toLowerCase().contains(query)).toList();
 
     return Scaffold(
       backgroundColor: const Color(0xFFF8F9FA),
+      floatingActionButton: FloatingActionButton.extended(
+        onPressed: _showCreateAccountDialog,
+        backgroundColor: adminPurple,
+        foregroundColor: Colors.white,
+        icon: const Icon(Icons.person_add_alt_1),
+        label: Text('Create Account',
+            style: GoogleFonts.poppins(fontWeight: FontWeight.w600)),
+      ),
       body: Padding(
         padding: const EdgeInsets.all(24),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text('Student Accounts Directory', style: GoogleFonts.poppins(fontSize: 24, fontWeight: FontWeight.w700)),
+            Text('Student Accounts Directory',
+                style: GoogleFonts.poppins(
+                    fontSize: 24, fontWeight: FontWeight.w700)),
+            const SizedBox(height: 4),
+            Text('Create credentials, release on inquiry, and top up credits.',
+                style: GoogleFonts.poppins(
+                    fontSize: 12, color: Colors.grey.shade600)),
             const SizedBox(height: 16),
             TextField(
               controller: _searchController,
@@ -514,94 +812,176 @@ class _AdminAccountsPageState extends State<AdminAccountsPage> {
               decoration: InputDecoration(
                 hintText: 'Search by student name or section...',
                 prefixIcon: const Icon(Icons.search),
-                border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
+                border:
+                    OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
                 filled: true,
                 fillColor: Colors.white,
-                contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+                contentPadding:
+                    const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
               ),
             ),
             const SizedBox(height: 16),
             Expanded(
-              child: Container(
-                padding: const EdgeInsets.all(16),
-                decoration: BoxDecoration(
-                  color: Colors.white,
-                  borderRadius: BorderRadius.circular(18),
-                  border: Border.all(color: Colors.grey.shade200),
-                ),
-                child: ListView.separated(
-                  itemCount: filtered.length,
-                  separatorBuilder: (context, i) => Divider(color: Colors.grey.shade100),
-                  itemBuilder: (context, index) {
-                    final s = filtered[index];
-                    return ListTile(
-                      leading: CircleAvatar(
-                        backgroundColor: adminPurple.withValues(alpha: 0.1),
-                        child: Text(
-                          (s['name'] as String)[0],
-                          style: GoogleFonts.poppins(color: adminPurple, fontWeight: FontWeight.bold),
-                        ),
-                      ),
-                      title: Text(s['name'] as String, style: GoogleFonts.poppins(fontWeight: FontWeight.w600, fontSize: 14)),
-                      subtitle: Text('${s['course']} • ID: ${s['id']}', style: GoogleFonts.poppins(fontSize: 12, color: Colors.grey.shade600)),
-                      trailing: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Column(
-                            mainAxisAlignment: MainAxisAlignment.center,
-                            crossAxisAlignment: CrossAxisAlignment.end,
+              child: StreamBuilder<List<AppUser>>(
+                stream: _service.studentsStream(),
+                builder: (context, snapshot) {
+                  if (snapshot.connectionState == ConnectionState.waiting) {
+                    return const Center(child: CircularProgressIndicator());
+                  }
+                  if (!snapshot.hasData || snapshot.data!.isEmpty) {
+                    return Center(
+                      child: Text('No accounts yet. Tap "Create Account".',
+                          style: GoogleFonts.poppins(
+                              color: Colors.grey.shade600)),
+                    );
+                  }
+
+                  final students = snapshot.data!.where((s) {
+                    final name =
+                        (s.displayName ?? s.username ?? '').toLowerCase();
+                    final course = (s.course ?? '').toLowerCase();
+                    return name.contains(query) || course.contains(query);
+                  }).toList();
+
+                  return Container(
+                    padding: const EdgeInsets.all(8),
+                    decoration: BoxDecoration(
+                      color: Colors.white,
+                      borderRadius: BorderRadius.circular(18),
+                      border: Border.all(color: Colors.grey.shade200),
+                    ),
+                    child: ListView.separated(
+                      itemCount: students.length,
+                      separatorBuilder: (_, __) =>
+                          Divider(color: Colors.grey.shade100),
+                      itemBuilder: (context, index) {
+                        final s = students[index];
+                        final isPending = s.isPending;
+                        final statusColor = isPending ? amber : green;
+
+                        return ListTile(
+                          contentPadding: const EdgeInsets.symmetric(
+                              horizontal: 12, vertical: 6),
+                          leading: CircleAvatar(
+                            backgroundColor: adminPurple.withValues(alpha: 0.1),
+                            child: Text(
+                              (s.displayName ?? 'U')[0].toUpperCase(),
+                              style: GoogleFonts.poppins(
+                                  color: adminPurple,
+                                  fontWeight: FontWeight.bold),
+                            ),
+                          ),
+                          title: Row(
                             children: [
-                              Text('${s['points']} pts', style: GoogleFonts.poppins(fontWeight: FontWeight.bold, fontSize: 13, color: green)),
-                              Text('${s['orders']} orders', style: GoogleFonts.poppins(fontSize: 11, color: Colors.grey.shade500)),
+                              Flexible(
+                                child: Text(
+                                  s.displayName ?? s.username ?? 'Unnamed',
+                                  overflow: TextOverflow.ellipsis,
+                                  style: GoogleFonts.poppins(
+                                      fontWeight: FontWeight.w600, fontSize: 14),
+                                ),
+                              ),
+                              const SizedBox(width: 8),
+                              Container(
+                                padding: const EdgeInsets.symmetric(
+                                    horizontal: 8, vertical: 2),
+                                decoration: BoxDecoration(
+                                  color: statusColor.withValues(alpha: 0.15),
+                                  borderRadius: BorderRadius.circular(6),
+                                ),
+                                child: Text(
+                                  isPending ? 'PENDING' : 'ACTIVE',
+                                  style: GoogleFonts.poppins(
+                                      fontSize: 10,
+                                      fontWeight: FontWeight.bold,
+                                      color: statusColor),
+                                ),
+                              ),
                             ],
                           ),
-                          const SizedBox(width: 12),
-                          Container(
-                            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                            decoration: BoxDecoration(color: green.withValues(alpha: 0.1), borderRadius: BorderRadius.circular(6)),
-                            child: Text(s['status'] as String, style: GoogleFonts.poppins(fontSize: 11, color: green, fontWeight: FontWeight.bold)),
+                          subtitle: Padding(
+                            padding: const EdgeInsets.only(top: 4),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  '${s.course ?? "-"} • ID: ${s.studentId ?? "-"}',
+                                  style: GoogleFonts.poppins(
+                                      fontSize: 12,
+                                      color: Colors.grey.shade600),
+                                ),
+                                const SizedBox(height: 4),
+                                Row(
+                                  children: [
+                                    Icon(Icons.account_balance_wallet,
+                                        size: 14, color: green),
+                                    const SizedBox(width: 4),
+                                    Text(
+                                      '₱${s.credits.toStringAsFixed(2)} credits',
+                                      style: GoogleFonts.poppins(
+                                          fontSize: 12,
+                                          fontWeight: FontWeight.w600,
+                                          color: green),
+                                    ),
+                                    const SizedBox(width: 12),
+                                    Icon(Icons.stars,
+                                        size: 14, color: adminPurple),
+                                    const SizedBox(width: 4),
+                                    Text(
+                                      '${s.points ?? 0} pts',
+                                      style: GoogleFonts.poppins(
+                                          fontSize: 12,
+                                          fontWeight: FontWeight.w600,
+                                          color: adminPurple),
+                                    ),
+                                  ],
+                                ),
+                              ],
+                            ),
                           ),
-                        ],
-                      ),
-                    );
-                  },
-                ),
+                          trailing: PopupMenuButton<String>(
+                            icon: const Icon(Icons.more_vert, size: 20),
+                            shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(12)),
+                            onSelected: (value) {
+                              if (value == 'release') _releaseAccount(s);
+                              if (value == 'credit') _showAddCreditDialog(s);
+                            },
+                            itemBuilder: (_) => [
+                              if (isPending)
+                                PopupMenuItem(
+                                  value: 'release',
+                                  child: Row(
+                                    children: [
+                                      Icon(Icons.vpn_key,
+                                          size: 18, color: green),
+                                      const SizedBox(width: 8),
+                                      const Text('Release Credentials'),
+                                    ],
+                                  ),
+                                ),
+                              PopupMenuItem(
+                                value: 'credit',
+                                child: Row(
+                                  children: [
+                                    Icon(Icons.add_card,
+                                        size: 18, color: adminPurple),
+                                    const SizedBox(width: 8),
+                                    const Text('Add Credit'),
+                                  ],
+                                ),
+                              ),
+                            ],
+                          ),
+                        );
+                      },
+                    ),
+                  );
+                },
               ),
             ),
-            const SizedBox(height: 12),
-            // Pagination
-            Row(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                _pageBtn('1', _currentPage == 1),
-                _pageBtn('2', _currentPage == 2),
-                _pageBtn('3', _currentPage == 3),
-              ],
-            ),
+            const SizedBox(height: 80), // space for FAB
           ],
-        ),
-      ),
-    );
-  }
-
-  Widget _pageBtn(String page, bool isCurrent) {
-    return InkWell(
-      onTap: () => setState(() => _currentPage = int.parse(page)),
-      child: Container(
-        margin: const EdgeInsets.symmetric(horizontal: 4),
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-        decoration: BoxDecoration(
-          color: isCurrent ? adminPurple : Colors.white,
-          borderRadius: BorderRadius.circular(8),
-          border: Border.all(color: isCurrent ? adminPurple : Colors.grey.shade300),
-        ),
-        child: Text(
-          page,
-          style: GoogleFonts.poppins(
-            fontWeight: FontWeight.bold,
-            fontSize: 12,
-            color: isCurrent ? Colors.white : Colors.black87,
-          ),
         ),
       ),
     );
