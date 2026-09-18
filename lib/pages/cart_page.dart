@@ -1,5 +1,8 @@
+// lib/pages/cart_page.dart
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import '../services/student_state.dart';
 
 class CartPage extends StatefulWidget {
@@ -12,7 +15,235 @@ class CartPage extends StatefulWidget {
 class _CartPageState extends State<CartPage> {
   final Color primaryColor = const Color(0xFF1E7B3B);
   final StudentAppState _state = StudentAppState();
-  String _selectedPaymentMethod = 'Cash at Cashier';
+  final FirebaseFirestore _firestore = FirebaseFirestore.instance;
+  final FirebaseAuth _auth = FirebaseAuth.instance;
+
+  bool _placingOrder = false;
+
+  Future<double> _loadCredits() async {
+    final uid = _auth.currentUser?.uid;
+    if (uid == null) return 0;
+    final doc = await _firestore.collection('users').doc(uid).get();
+    return (doc.data()?['credits'] as num?)?.toDouble() ?? 0.0;
+  }
+
+  // ---------- Delete confirmation ----------
+  Future<bool> _confirmDelete(StudentCartItem item) async {
+    final result = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
+        title: Row(
+          children: [
+            Icon(Icons.delete_outline, color: Colors.red.shade600, size: 24),
+            const SizedBox(width: 10),
+            Text(
+              'Remove item?',
+              style: GoogleFonts.poppins(
+                  fontWeight: FontWeight.bold, fontSize: 16),
+            ),
+          ],
+        ),
+        content: Text(
+          'Remove "${item.name}" from your cart?',
+          style: GoogleFonts.poppins(fontSize: 13),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: Text('No',
+                style: GoogleFonts.poppins(
+                    color: Colors.grey.shade700,
+                    fontWeight: FontWeight.w600)),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: Colors.red.shade600,
+              foregroundColor: Colors.white,
+              shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(10)),
+            ),
+            child: Text('Yes, remove',
+                style: GoogleFonts.poppins(fontWeight: FontWeight.w600)),
+          ),
+        ],
+      ),
+    );
+    return result ?? false;
+  }
+
+  Future<void> _handleRemove(StudentCartItem item) async {
+    final confirmed = await _confirmDelete(item);
+    if (!confirmed) return;
+    _state.removeFromCart(item.id);
+    if (mounted) {
+      _snack('${item.name} removed from cart');
+    }
+  }
+
+  Future<void> _checkout() async {
+    final uid = _auth.currentUser?.uid;
+    if (uid == null) {
+      _snack('You must be logged in to checkout.', isError: true);
+      return;
+    }
+    if (_state.cartItems.isEmpty) return;
+
+    setState(() => _placingOrder = true);
+    final total = _state.subtotal;
+
+    try {
+      await _firestore.runTransaction((tx) async {
+        final userRef = _firestore.collection('users').doc(uid);
+        final userSnap = await tx.get(userRef);
+        if (!userSnap.exists) throw Exception('User not found.');
+
+        final currentCredits =
+            (userSnap.data()?['credits'] as num?)?.toDouble() ?? 0.0;
+        if (currentCredits < total) {
+          throw Exception(
+              'Insufficient credits. You have ₱${currentCredits.toStringAsFixed(2)}, need ₱${total.toStringAsFixed(2)}.');
+        }
+
+        final menuSnaps = <String, DocumentSnapshot>{};
+        for (final item in _state.cartItems) {
+          final ref = _firestore.collection('menu_items').doc(item.id);
+          final snap = await tx.get(ref);
+          if (!snap.exists) {
+            throw Exception('${item.name} is no longer on the menu.');
+          }
+          final stock = (snap.data()?['stock'] as num?)?.toInt() ?? 0;
+          if (stock < item.quantity) {
+            throw Exception(
+                'Not enough stock for ${item.name} (only $stock left).');
+          }
+          menuSnaps[item.id] = snap;
+        }
+
+        final newBalance = currentCredits - total;
+        tx.update(userRef, {
+          'credits': newBalance,
+          'updatedAt': FieldValue.serverTimestamp(),
+        });
+
+        for (final item in _state.cartItems) {
+          final snap = menuSnaps[item.id]!;
+          final stock = (snap.data() as Map)['stock'] as num? ?? 0;
+          tx.update(_firestore.collection('menu_items').doc(item.id), {
+            'stock': stock.toInt() - item.quantity,
+            'isAvailable': (stock.toInt() - item.quantity) > 0,
+          });
+        }
+
+        final orderRef = _firestore.collection('orders').doc();
+        tx.set(orderRef, {
+          'orderNumber': orderRef.id.substring(0, 8).toUpperCase(),
+          'userId': uid,
+          'items': _state.cartItems
+              .map((e) => {
+                    'id': e.id,
+                    'name': e.name,
+                    'price': e.price,
+                    'quantity': e.quantity,
+                  })
+              .toList(),
+          'total': total,
+          'paymentMethod': 'Credits',
+          'status': 'Pending',
+          'createdAt': FieldValue.serverTimestamp(),
+        });
+
+        final txLogRef = _firestore.collection('credit_transactions').doc();
+        tx.set(txLogRef, {
+          'uid': uid,
+          'type': 'debit',
+          'amount': total,
+          'balanceAfter': newBalance,
+          'note': 'Order payment',
+          'timestamp': FieldValue.serverTimestamp(),
+        });
+      });
+
+      _state.clearCart();
+      if (!mounted) return;
+      _showSuccessDialog();
+    } catch (e) {
+      if (!mounted) return;
+      _snack(e.toString().replaceFirst('Exception: ', ''), isError: true);
+    } finally {
+      if (mounted) setState(() => _placingOrder = false);
+    }
+  }
+
+  void _snack(String msg, {bool isError = false}) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(msg),
+        backgroundColor: isError ? Colors.red.shade600 : primaryColor,
+        duration: const Duration(milliseconds: 1400),
+        behavior: SnackBarBehavior.floating,
+      ),
+    );
+  }
+
+  void _showSuccessDialog() {
+    showDialog(
+      context: context,
+      builder: (context) => Dialog(
+        shape:
+            RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        child: Padding(
+          padding: const EdgeInsets.all(24),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(
+                padding: const EdgeInsets.all(16),
+                decoration: const BoxDecoration(
+                  color: Color(0xFFE8F5E9),
+                  shape: BoxShape.circle,
+                ),
+                child: Icon(Icons.check_circle_rounded,
+                    color: primaryColor, size: 50),
+              ),
+              const SizedBox(height: 16),
+              Text('Order Placed!',
+                  style: GoogleFonts.poppins(
+                      fontSize: 20, fontWeight: FontWeight.w700)),
+              const SizedBox(height: 8),
+              Text(
+                'Your order has been submitted to the canteen. Credits were deducted from your balance.',
+                textAlign: TextAlign.center,
+                style: GoogleFonts.poppins(
+                    fontSize: 13, color: Colors.grey.shade600),
+              ),
+              const SizedBox(height: 20),
+              SizedBox(
+                width: double.infinity,
+                child: ElevatedButton(
+                  onPressed: () {
+                    Navigator.pop(context);
+                    _state.setTabIndex(3);
+                  },
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: primaryColor,
+                    shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(12)),
+                    padding: const EdgeInsets.symmetric(vertical: 14),
+                  ),
+                  child: Text('View in Orders',
+                      style: GoogleFonts.poppins(
+                          color: Colors.white,
+                          fontWeight: FontWeight.w600)),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -28,239 +259,46 @@ class _CartPageState extends State<CartPage> {
             backgroundColor: Colors.white,
             elevation: 0,
             leading: IconButton(
-              icon: const Icon(Icons.arrow_back_ios_new_rounded, color: Colors.black87, size: 20),
-              onPressed: () => _state.setTabIndex(0), // Back to Home
+              icon: const Icon(Icons.arrow_back_ios_new_rounded,
+                  color: Colors.black87, size: 20),
+              onPressed: () => _state.setTabIndex(0),
             ),
             centerTitle: true,
-            title: Text(
-              'My Cart',
-              style: GoogleFonts.poppins(
-                fontWeight: FontWeight.w700,
-                fontSize: 20,
-                color: Colors.black87,
-              ),
-            ),
+            title: Text('My Cart',
+                style: GoogleFonts.poppins(
+                    fontWeight: FontWeight.w700,
+                    fontSize: 20,
+                    color: Colors.black87)),
           ),
           body: cartItems.isEmpty
-              ? Center(
-                  child: Column(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      Icon(Icons.shopping_cart_outlined, size: 70, color: Colors.grey.shade400),
-                      const SizedBox(height: 16),
-                      Text(
-                        'Your cart is empty',
-                        style: GoogleFonts.poppins(
-                          fontSize: 18,
-                          fontWeight: FontWeight.w600,
-                          color: Colors.grey.shade700,
-                        ),
-                      ),
-                      const SizedBox(height: 8),
-                      Text(
-                        'Add items from the menu to get started',
-                        style: GoogleFonts.poppins(color: Colors.grey.shade500, fontSize: 14),
-                      ),
-                      const SizedBox(height: 20),
-                      ElevatedButton(
-                        onPressed: () => _state.setTabIndex(1), // Go to Menu
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: primaryColor,
-                          padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
-                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                        ),
-                        child: Text(
-                          'Browse Menu',
-                          style: GoogleFonts.poppins(color: Colors.white, fontWeight: FontWeight.w600),
-                        ),
-                      ),
-                    ],
-                  ),
-                )
+              ? _buildEmptyCart()
               : Column(
                   children: [
-                    // Cart Items List
                     Expanded(
                       child: ListView.builder(
                         padding: const EdgeInsets.all(16),
                         itemCount: cartItems.length,
                         itemBuilder: (context, index) {
                           final item = cartItems[index];
-                          return _buildCartItemCard(item);
+                          // Each item gets a unique Dismissible key so
+                          // Flutter can track it across rebuilds.
+                          return Dismissible(
+                            key: ValueKey(item.id),
+                            direction: DismissDirection.endToStart,
+                            confirmDismiss: (_) async {
+                              return await _confirmDelete(item);
+                            },
+                            onDismissed: (_) {
+                              _state.removeFromCart(item.id);
+                              _snack('${item.name} removed from cart');
+                            },
+                            background: _buildSwipeBackground(),
+                            child: _buildCartItemCard(item),
+                          );
                         },
                       ),
                     ),
-
-                    // Checkout Bottom Sheet
-                    Container(
-                      padding: const EdgeInsets.all(20),
-                      decoration: BoxDecoration(
-                        color: Colors.white,
-                        borderRadius: const BorderRadius.only(
-                          topLeft: Radius.circular(24),
-                          topRight: Radius.circular(24),
-                        ),
-                        boxShadow: [
-                          BoxShadow(
-                            color: Colors.black.withValues(alpha: 0.08),
-                            blurRadius: 15,
-                            offset: const Offset(0, -4),
-                          ),
-                        ],
-                      ),
-                      child: SafeArea(
-                        top: false,
-                        child: Column(
-                          mainAxisSize: MainAxisSize.min,
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            // Subtotal Row
-                            Row(
-                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                              children: [
-                                Text(
-                                  'Subtotal',
-                                  style: GoogleFonts.poppins(
-                                    fontSize: 16,
-                                    fontWeight: FontWeight.w500,
-                                    color: Colors.black87,
-                                  ),
-                                ),
-                                Text(
-                                  '₱${subtotal.toStringAsFixed(0)}',
-                                  style: GoogleFonts.poppins(
-                                    fontSize: 22,
-                                    fontWeight: FontWeight.w700,
-                                    color: Colors.black87,
-                                  ),
-                                ),
-                              ],
-                            ),
-                            const SizedBox(height: 18),
-
-                            // Payment Method Title
-                            Text(
-                              'Payment Method',
-                              style: GoogleFonts.poppins(
-                                fontSize: 14,
-                                fontWeight: FontWeight.w600,
-                                color: Colors.black87,
-                              ),
-                            ),
-                            const SizedBox(height: 10),
-
-                            // Payment Method Radio Options
-                            _buildPaymentOption(
-                              title: 'Cash at Cashier',
-                              isSelected: _selectedPaymentMethod == 'Cash at Cashier',
-                              onTap: () => setState(() => _selectedPaymentMethod = 'Cash at Cashier'),
-                            ),
-                            const SizedBox(height: 8),
-                            _buildPaymentOption(
-                              title: 'GCash',
-                              isSelected: _selectedPaymentMethod == 'GCash',
-                              onTap: () => setState(() => _selectedPaymentMethod = 'GCash'),
-                            ),
-                            const SizedBox(height: 20),
-
-                            // Checkout Button
-                            SizedBox(
-                              width: double.infinity,
-                              height: 54,
-                              child: ElevatedButton(
-                                onPressed: () {
-                                  _state.placeOrder(_selectedPaymentMethod);
-                                  showDialog(
-                                    context: context,
-                                    builder: (context) => Dialog(
-                                      shape: RoundedRectangleBorder(
-                                        borderRadius: BorderRadius.circular(20),
-                                      ),
-                                      child: Padding(
-                                        padding: const EdgeInsets.all(24),
-                                        child: Column(
-                                          mainAxisSize: MainAxisSize.min,
-                                          children: [
-                                            Container(
-                                              padding: const EdgeInsets.all(16),
-                                              decoration: const BoxDecoration(
-                                                color: Color(0xFFE8F5E9),
-                                                shape: BoxShape.circle,
-                                              ),
-                                              child: Icon(
-                                                Icons.check_circle_rounded,
-                                                color: primaryColor,
-                                                size: 50,
-                                              ),
-                                            ),
-                                            const SizedBox(height: 16),
-                                            Text(
-                                              'Order Placed!',
-                                              style: GoogleFonts.poppins(
-                                                fontSize: 20,
-                                                fontWeight: FontWeight.w700,
-                                              ),
-                                            ),
-                                            const SizedBox(height: 8),
-                                            Text(
-                                              'Your order has been submitted to the canteen.',
-                                              textAlign: TextAlign.center,
-                                              style: GoogleFonts.poppins(
-                                                fontSize: 13,
-                                                color: Colors.grey.shade600,
-                                              ),
-                                            ),
-                                            const SizedBox(height: 20),
-                                            SizedBox(
-                                              width: double.infinity,
-                                              child: ElevatedButton(
-                                                onPressed: () {
-                                                  Navigator.pop(context);
-                                                  _state.setTabIndex(3); // Go to Orders tab
-                                                },
-                                                style: ElevatedButton.styleFrom(
-                                                  backgroundColor: primaryColor,
-                                                  shape: RoundedRectangleBorder(
-                                                    borderRadius: BorderRadius.circular(12),
-                                                  ),
-                                                  padding: const EdgeInsets.symmetric(vertical: 14),
-                                                ),
-                                                child: Text(
-                                                  'View in Orders',
-                                                  style: GoogleFonts.poppins(
-                                                    color: Colors.white,
-                                                    fontWeight: FontWeight.w600,
-                                                  ),
-                                                ),
-                                              ),
-                                            ),
-                                          ],
-                                        ),
-                                      ),
-                                    ),
-                                  );
-                                },
-                                style: ElevatedButton.styleFrom(
-                                  backgroundColor: primaryColor,
-                                  foregroundColor: Colors.white,
-                                  elevation: 2,
-                                  shape: RoundedRectangleBorder(
-                                    borderRadius: BorderRadius.circular(14),
-                                  ),
-                                ),
-                                child: Text(
-                                  'Checkout ( ₱${subtotal.toStringAsFixed(0)} )',
-                                  style: GoogleFonts.poppins(
-                                    fontSize: 16,
-                                    fontWeight: FontWeight.w600,
-                                  ),
-                                ),
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ),
+                    _buildCheckoutSheet(subtotal),
                   ],
                 ),
         );
@@ -268,49 +306,187 @@ class _CartPageState extends State<CartPage> {
     );
   }
 
-  Widget _buildPaymentOption({
-    required String title,
-    required bool isSelected,
-    required VoidCallback onTap,
-  }) {
-    return GestureDetector(
-      onTap: onTap,
-      behavior: HitTestBehavior.opaque,
+  // Red background revealed while swiping an item to the left.
+  Widget _buildSwipeBackground() {
+    return Container(
+      margin: const EdgeInsets.only(bottom: 14),
+      padding: const EdgeInsets.symmetric(horizontal: 24),
+      decoration: BoxDecoration(
+        color: Colors.red.shade600,
+        borderRadius: BorderRadius.circular(18),
+      ),
+      alignment: Alignment.centerRight,
       child: Row(
+        mainAxisAlignment: MainAxisAlignment.end,
+        mainAxisSize: MainAxisSize.min,
         children: [
-          Container(
-            width: 20,
-            height: 20,
-            decoration: BoxDecoration(
-              shape: BoxShape.circle,
-              border: Border.all(
-                color: isSelected ? primaryColor : Colors.grey.shade400,
-                width: 2,
-              ),
-            ),
-            child: isSelected
-                ? Center(
-                    child: Container(
-                      width: 10,
-                      height: 10,
-                      decoration: BoxDecoration(
-                        shape: BoxShape.circle,
-                        color: primaryColor,
-                      ),
-                    ),
-                  )
-                : null,
-          ),
-          const SizedBox(width: 10),
+          const Icon(Icons.delete_outline, color: Colors.white, size: 26),
+          const SizedBox(width: 8),
           Text(
-            title,
+            'Remove',
             style: GoogleFonts.poppins(
-              fontSize: 14,
-              fontWeight: FontWeight.w500,
-              color: Colors.black87,
-            ),
+                color: Colors.white,
+                fontWeight: FontWeight.w700,
+                fontSize: 14),
           ),
         ],
+      ),
+    );
+  }
+
+  Widget _buildEmptyCart() {
+    return Center(
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          Icon(Icons.shopping_cart_outlined,
+              size: 70, color: Colors.grey.shade400),
+          const SizedBox(height: 16),
+          Text('Your cart is empty',
+              style: GoogleFonts.poppins(
+                  fontSize: 18,
+                  fontWeight: FontWeight.w600,
+                  color: Colors.grey.shade700)),
+          const SizedBox(height: 8),
+          Text('Add items from the menu to get started',
+              style: GoogleFonts.poppins(
+                  color: Colors.grey.shade500, fontSize: 14)),
+          const SizedBox(height: 20),
+          ElevatedButton(
+            onPressed: () => _state.setTabIndex(1),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: primaryColor,
+              padding:
+                  const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
+              shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(12)),
+            ),
+            child: Text('Browse Menu',
+                style: GoogleFonts.poppins(
+                    color: Colors.white, fontWeight: FontWeight.w600)),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildCheckoutSheet(double subtotal) {
+    return Container(
+      padding: const EdgeInsets.all(20),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: const BorderRadius.only(
+          topLeft: Radius.circular(24),
+          topRight: Radius.circular(24),
+        ),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.08),
+            blurRadius: 15,
+            offset: const Offset(0, -4),
+          ),
+        ],
+      ),
+      child: SafeArea(
+        top: false,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            FutureBuilder<double>(
+              future: _loadCredits(),
+              builder: (context, snap) {
+                final credits = snap.data ?? 0;
+                final insufficient = snap.hasData && credits < subtotal;
+                return Container(
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: insufficient
+                        ? Colors.red.withValues(alpha: 0.08)
+                        : primaryColor.withValues(alpha: 0.08),
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: Row(
+                    children: [
+                      Icon(Icons.account_balance_wallet,
+                          color:
+                              insufficient ? Colors.red.shade600 : primaryColor,
+                          size: 20),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text('Paying with Credits',
+                                style: GoogleFonts.poppins(
+                                    fontWeight: FontWeight.w600,
+                                    fontSize: 13)),
+                            Text(
+                              snap.hasData
+                                  ? 'Balance: ₱${credits.toStringAsFixed(2)}'
+                                  : 'Loading balance...',
+                              style: GoogleFonts.poppins(
+                                  fontSize: 12,
+                                  color: Colors.grey.shade700),
+                            ),
+                          ],
+                        ),
+                      ),
+                      if (insufficient)
+                        Text('Insufficient',
+                            style: GoogleFonts.poppins(
+                                color: Colors.red.shade600,
+                                fontWeight: FontWeight.w700,
+                                fontSize: 12)),
+                    ],
+                  ),
+                );
+              },
+            ),
+            const SizedBox(height: 16),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Text('Subtotal',
+                    style: GoogleFonts.poppins(
+                        fontSize: 16,
+                        fontWeight: FontWeight.w500,
+                        color: Colors.black87)),
+                Text('₱${subtotal.toStringAsFixed(0)}',
+                    style: GoogleFonts.poppins(
+                        fontSize: 22,
+                        fontWeight: FontWeight.w700,
+                        color: Colors.black87)),
+              ],
+            ),
+            const SizedBox(height: 20),
+            SizedBox(
+              width: double.infinity,
+              height: 54,
+              child: ElevatedButton(
+                onPressed: _placingOrder ? null : _checkout,
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: primaryColor,
+                  foregroundColor: Colors.white,
+                  elevation: 2,
+                  shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(14)),
+                ),
+                child: _placingOrder
+                    ? const SizedBox(
+                        width: 22,
+                        height: 22,
+                        child: CircularProgressIndicator(
+                            color: Colors.white, strokeWidth: 2.5),
+                      )
+                    : Text(
+                        'Pay with Credits ( ₱${subtotal.toStringAsFixed(0)} )',
+                        style: GoogleFonts.poppins(
+                            fontSize: 15, fontWeight: FontWeight.w600)),
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -333,51 +509,44 @@ class _CartPageState extends State<CartPage> {
       ),
       child: Row(
         children: [
-          // Food Image
           ClipRRect(
             borderRadius: BorderRadius.circular(14),
             child: Container(
               width: 70,
               height: 70,
               color: Colors.grey.shade100,
-              child: Image.network(
-                item.imageUrl,
-                fit: BoxFit.cover,
-                errorBuilder: (context, error, stackTrace) => Center(
-                  child: Icon(item.fallbackIcon, size: 36, color: primaryColor),
-                ),
-              ),
+              child: item.imageUrl.isNotEmpty
+                  ? Image.network(
+                      item.imageUrl,
+                      fit: BoxFit.cover,
+                      errorBuilder: (_, __, ___) => Center(
+                          child: Icon(item.fallbackIcon,
+                              size: 36, color: primaryColor)),
+                    )
+                  : Center(
+                      child: Icon(item.fallbackIcon,
+                          size: 36, color: primaryColor)),
             ),
           ),
           const SizedBox(width: 14),
-
-          // Name and Price
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(
-                  item.name,
-                  style: GoogleFonts.poppins(
-                    fontWeight: FontWeight.w600,
-                    fontSize: 15,
-                    color: Colors.black87,
-                  ),
-                ),
+                Text(item.name,
+                    style: GoogleFonts.poppins(
+                        fontWeight: FontWeight.w600,
+                        fontSize: 15,
+                        color: Colors.black87)),
                 const SizedBox(height: 6),
-                Text(
-                  '₱${item.price.toStringAsFixed(0)}',
-                  style: GoogleFonts.poppins(
-                    fontWeight: FontWeight.w700,
-                    fontSize: 15,
-                    color: Colors.black87,
-                  ),
-                ),
+                Text('₱${item.price.toStringAsFixed(0)}',
+                    style: GoogleFonts.poppins(
+                        fontWeight: FontWeight.w700,
+                        fontSize: 15,
+                        color: Colors.black87)),
               ],
             ),
           ),
-
-          // Stepper: - Qty +
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
             decoration: BoxDecoration(
@@ -392,26 +561,28 @@ class _CartPageState extends State<CartPage> {
                   onTap: () => _state.updateQuantity(item.id, -1),
                   borderRadius: BorderRadius.circular(6),
                   child: const Padding(
-                    padding: EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                    child: Text('-', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600)),
+                    padding:
+                        EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                    child: Text('-',
+                        style: TextStyle(
+                            fontSize: 18, fontWeight: FontWeight.w600)),
                   ),
                 ),
                 Padding(
                   padding: const EdgeInsets.symmetric(horizontal: 8),
-                  child: Text(
-                    '${item.quantity}',
-                    style: GoogleFonts.poppins(
-                      fontSize: 14,
-                      fontWeight: FontWeight.w700,
-                    ),
-                  ),
+                  child: Text('${item.quantity}',
+                      style: GoogleFonts.poppins(
+                          fontSize: 14, fontWeight: FontWeight.w700)),
                 ),
                 InkWell(
                   onTap: () => _state.updateQuantity(item.id, 1),
                   borderRadius: BorderRadius.circular(6),
                   child: const Padding(
-                    padding: EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                    child: Text('+', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600)),
+                    padding:
+                        EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                    child: Text('+',
+                        style: TextStyle(
+                            fontSize: 16, fontWeight: FontWeight.w600)),
                   ),
                 ),
               ],
