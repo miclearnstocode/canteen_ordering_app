@@ -197,7 +197,7 @@ class AdminDashboardPage extends StatelessWidget {
 }
 
 // ==========================================
-// 2. ADMIN ORDERS PAGE
+// 2. ADMIN ORDERS PAGE (Firestore-backed)
 // ==========================================
 class AdminOrdersPage extends StatefulWidget {
   const AdminOrdersPage({super.key});
@@ -208,52 +208,29 @@ class AdminOrdersPage extends StatefulWidget {
 
 class _AdminOrdersPageState extends State<AdminOrdersPage> {
   final Color adminPurple = const Color(0xFF5E35B1);
-  String _selectedTab = 'All';
+  final FirebaseFirestore _firestore = FirebaseFirestore.instance;
 
-  final List<Map<String, dynamic>> _orders = [
-    {
-      'id': '#10025',
-      'time': '10:30 AM',
-      'name': 'Marianne Santos',
-      'method': 'Cash',
-      'amount': '₱315',
-      'status': 'Pending',
-    },
-    {
-      'id': '#10026',
-      'time': '10:32 AM',
-      'name': 'John Dela Cruz',
-      'method': 'GCash',
-      'amount': '₱190',
-      'status': 'Preparing',
-    },
-    {
-      'id': '#10027',
-      'time': '10:34 AM',
-      'name': 'Andrea Reyes',
-      'method': 'Cash',
-      'amount': '₱120',
-      'status': 'Ready',
-    },
-    {
-      'id': '#10028',
-      'time': '10:40 AM',
-      'name': 'Mark Garcia',
-      'method': 'GCash',
-      'amount': '₱250',
-      'status': 'Completed',
-    },
-    {
-      'id': '#10029',
-      'time': '10:45 AM',
-      'name': 'Kyle Villanueva',
-      'method': 'Cash',
-      'amount': '₱85',
-      'status': 'Pending',
-    },
+  String _selectedTab = 'All';
+  String? _updatingId;
+
+  // Cache: userId -> display name. Fetched lazily and reused across rebuilds.
+  final Map<String, String> _nameCache = {};
+  final Set<String> _loadingNames = {};
+
+  static const List<String> _statuses = [
+    'Pending',
+    'Preparing',
+    'Ready',
+    'Completed',
+    'Cancelled',
   ];
 
-  Color _getStatusColor(String status) {
+  @override
+  void initState() {
+    super.initState();
+  }
+
+  Color _statusColor(String status) {
     switch (status.toLowerCase()) {
       case 'pending':
         return Colors.orange.shade800;
@@ -262,38 +239,170 @@ class _AdminOrdersPageState extends State<AdminOrdersPage> {
       case 'ready':
         return const Color(0xFF2E7D32);
       case 'completed':
+        return Colors.grey.shade600;
+      case 'cancelled':
+        return Colors.red.shade700;
       default:
         return Colors.grey.shade600;
     }
   }
 
-  void _cycleStatus(int index) {
-    setState(() {
-      final current = _orders[index]['status'] as String;
-      if (current == 'Pending') {
-        _orders[index]['status'] = 'Preparing';
-      } else if (current == 'Preparing') {
-        _orders[index]['status'] = 'Ready';
-      } else if (current == 'Ready') {
-        _orders[index]['status'] = 'Completed';
-      } else {
-        _orders[index]['status'] = 'Pending';
-      }
-    });
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text('Order ${_orders[index]['id']} updated to ${_orders[index]['status']}'),
-        duration: const Duration(seconds: 1),
+  /// Look up a student's display name by uid. Caches the result.
+  /// Returns null while loading (caller shows a placeholder).
+  String? _nameFor(String uid) {
+    if (_nameCache.containsKey(uid)) return _nameCache[uid];
+
+    // Kick off a fetch once per uid.
+    if (!_loadingNames.contains(uid)) {
+      _loadingNames.add(uid);
+      _firestore.collection('users').doc(uid).get().then((doc) {
+        final data = doc.data();
+        final name = (data?['displayName'] ??
+                data?['username'] ??
+                'Unknown Student')
+            .toString();
+        if (!mounted) return;
+        setState(() {
+          _nameCache[uid] = name;
+          _loadingNames.remove(uid);
+        });
+      }).catchError((_) {
+        if (!mounted) return;
+        setState(() {
+          _nameCache[uid] = 'Unknown Student';
+          _loadingNames.remove(uid);
+        });
+      });
+    }
+    return null; // still loading
+  }
+
+  // ---- Status update with confirmation ----
+  Future<void> _updateStatus(
+      String orderId, String currentStatus, String newStatus) async {
+    if (currentStatus == newStatus) return;
+
+    if (currentStatus == 'Completed') {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Completed orders can no longer be changed.'),
+          backgroundColor: Colors.red,
+        ),
+      );
+      return;
+    }
+
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: Text('Change status?',
+            style: GoogleFonts.poppins(fontWeight: FontWeight.bold)),
+        content: Text('Set order to "$newStatus"?',
+            style: GoogleFonts.poppins(fontSize: 13)),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancel'),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: _statusColor(newStatus),
+              foregroundColor: Colors.white,
+            ),
+            child: Text('Yes, $newStatus'),
+          ),
+        ],
       ),
     );
+
+    if (confirmed != true) return;
+
+    setState(() => _updatingId = orderId);
+    try {
+      await _firestore.collection('orders').doc(orderId).update({
+        'status': newStatus,
+        'updatedAt': FieldValue.serverTimestamp(),
+      });
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Order updated to $newStatus'),
+            backgroundColor: _statusColor(newStatus),
+          ),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Failed: $e'), backgroundColor: Colors.red),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _updatingId = null);
+    }
+  }
+
+  Future<void> _showStatusPicker(
+      String orderId, String currentStatus) async {
+    final picked = await showModalBottomSheet<String>(
+      context: context,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (ctx) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const SizedBox(height: 12),
+            Container(
+              width: 40,
+              height: 4,
+              decoration: BoxDecoration(
+                color: Colors.grey.shade300,
+                borderRadius: BorderRadius.circular(2),
+              ),
+            ),
+            const SizedBox(height: 16),
+            Text('Update Status',
+                style: GoogleFonts.poppins(
+                    fontSize: 16, fontWeight: FontWeight.w700)),
+            const SizedBox(height: 8),
+            ..._statuses.map((s) {
+              final isCurrent = s == currentStatus;
+              final color = _statusColor(s);
+              return ListTile(
+                leading: Icon(
+                  isCurrent
+                      ? Icons.radio_button_checked
+                      : Icons.radio_button_unchecked,
+                  color: color,
+                ),
+                title: Text(
+                  s,
+                  style: GoogleFonts.poppins(
+                    fontWeight:
+                        isCurrent ? FontWeight.w700 : FontWeight.w500,
+                    color: color,
+                  ),
+                ),
+                onTap: () => Navigator.pop(ctx, s),
+              );
+            }),
+            const SizedBox(height: 8),
+          ],
+        ),
+      ),
+    );
+
+    if (picked != null && picked != currentStatus) {
+      await _updateStatus(orderId, currentStatus, picked);
+    }
   }
 
   @override
   Widget build(BuildContext context) {
-    final filtered = _selectedTab == 'All'
-        ? _orders
-        : _orders.where((o) => (o['status'] as String).toLowerCase() == _selectedTab.toLowerCase()).toList();
-
     return Scaffold(
       backgroundColor: const Color(0xFFF8F9FA),
       body: Padding(
@@ -301,13 +410,22 @@ class _AdminOrdersPageState extends State<AdminOrdersPage> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text('Orders Management', style: GoogleFonts.poppins(fontSize: 24, fontWeight: FontWeight.w700)),
+            Text('Orders Management',
+                style: GoogleFonts.poppins(
+                    fontSize: 24, fontWeight: FontWeight.w700)),
+            const SizedBox(height: 4),
+            Text(
+              'Live orders from students. Tap a status to update it.',
+              style: GoogleFonts.poppins(
+                  fontSize: 12, color: Colors.grey.shade600),
+            ),
             const SizedBox(height: 16),
-            // Filter Tabs
+
+            // Filter chips
             SingleChildScrollView(
               scrollDirection: Axis.horizontal,
               child: Row(
-                children: ['All', 'Pending', 'Preparing', 'Ready', 'Completed'].map((tab) {
+                children: ['All', ..._statuses].map((tab) {
                   final isSelected = _selectedTab == tab;
                   return Padding(
                     padding: const EdgeInsets.only(right: 12),
@@ -317,7 +435,9 @@ class _AdminOrdersPageState extends State<AdminOrdersPage> {
                       selectedColor: adminPurple,
                       labelStyle: GoogleFonts.poppins(
                         color: isSelected ? Colors.white : Colors.black87,
-                        fontWeight: isSelected ? FontWeight.w600 : FontWeight.w400,
+                        fontWeight: isSelected
+                            ? FontWeight.w600
+                            : FontWeight.w400,
                       ),
                       onSelected: (selected) {
                         if (selected) setState(() => _selectedTab = tab);
@@ -328,7 +448,7 @@ class _AdminOrdersPageState extends State<AdminOrdersPage> {
               ),
             ),
             const SizedBox(height: 16),
-            // Orders Table / List
+
             Expanded(
               child: Container(
                 padding: const EdgeInsets.all(16),
@@ -337,80 +457,254 @@ class _AdminOrdersPageState extends State<AdminOrdersPage> {
                   borderRadius: BorderRadius.circular(18),
                   border: Border.all(color: Colors.grey.shade200),
                 ),
-                child: filtered.isEmpty
-                    ? Center(
-                        child: Text(
-                          'No $_selectedTab orders found',
-                          style: GoogleFonts.poppins(color: Colors.grey),
+                child: StreamBuilder<QuerySnapshot>(
+                  stream: _firestore.collection('orders').snapshots(),
+                  builder: (context, snapshot) {
+                    if (snapshot.connectionState == ConnectionState.waiting) {
+                      return const Center(child: CircularProgressIndicator());
+                    }
+                    if (snapshot.hasError) {
+                      return Center(
+                        child: Padding(
+                          padding: const EdgeInsets.all(16),
+                          child: Text(
+                            'Failed to load orders:\n${snapshot.error}',
+                            textAlign: TextAlign.center,
+                            style: GoogleFonts.poppins(
+                                color: Colors.red.shade700, fontSize: 12),
+                          ),
                         ),
-                      )
-                    : ListView.separated(
-                        itemCount: filtered.length,
-                        separatorBuilder: (context, i) => Divider(color: Colors.grey.shade100),
-                        itemBuilder: (context, index) {
-                          final order = filtered[index];
-                          final originalIndex = _orders.indexOf(order);
-                          final color = _getStatusColor(order['status'] as String);
+                      );
+                    }
 
-                          return ListTile(
-                            contentPadding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                            leading: Container(
-                              padding: const EdgeInsets.all(10),
-                              decoration: BoxDecoration(
-                                color: color.withValues(alpha: 0.1),
-                                borderRadius: BorderRadius.circular(10),
+                    final orders = (snapshot.data?.docs ?? [])
+                        .map((d) => _AdminOrder.fromDoc(d))
+                        .toList()
+                      ..sort((a, b) {
+                        final aT = a.createdAt ??
+                            DateTime.fromMillisecondsSinceEpoch(0);
+                        final bT = b.createdAt ??
+                            DateTime.fromMillisecondsSinceEpoch(0);
+                        return bT.compareTo(aT);
+                      });
+
+                    final filtered = _selectedTab == 'All'
+                        ? orders
+                        : orders
+                            .where((o) =>
+                                o.status.toLowerCase() ==
+                                _selectedTab.toLowerCase())
+                            .toList();
+
+                    if (filtered.isEmpty) {
+                      return Center(
+                        child: Column(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            Icon(Icons.receipt_long_outlined,
+                                size: 60, color: Colors.grey.shade400),
+                            const SizedBox(height: 12),
+                            Text('No $_selectedTab orders',
+                                style: GoogleFonts.poppins(
+                                    color: Colors.grey.shade600)),
+                          ],
+                        ),
+                      );
+                    }
+
+                    return ListView.separated(
+                      itemCount: filtered.length,
+                      separatorBuilder: (context, i) =>
+                          Divider(color: Colors.grey.shade100),
+                      itemBuilder: (context, index) {
+                        final order = filtered[index];
+                        final color = _statusColor(order.status);
+                        final isUpdating = _updatingId == order.id;
+
+                        // Resolve buyer name via cache; returns null on
+                        // the first frame while the fetch is in flight.
+                        final cachedName = _nameFor(order.userId);
+
+                        return ListTile(
+                          contentPadding: const EdgeInsets.symmetric(
+                              horizontal: 8, vertical: 6),
+                          leading: Container(
+                            padding: const EdgeInsets.all(10),
+                            decoration: BoxDecoration(
+                              color: color.withValues(alpha: 0.1),
+                              borderRadius: BorderRadius.circular(10),
+                            ),
+                            child: Text(
+                              '#${order.orderNumber}',
+                              style: GoogleFonts.poppins(
+                                  fontWeight: FontWeight.bold,
+                                  fontSize: 12,
+                                  color: color),
+                            ),
+                          ),
+                          title: Row(
+                            children: [
+                              Expanded(
+                                child: Text(
+                                  cachedName ?? 'Loading…',
+                                  style: GoogleFonts.poppins(
+                                      fontWeight: FontWeight.w600,
+                                      fontSize: 14,
+                                      color: cachedName == null
+                                          ? Colors.grey.shade500
+                                          : Colors.black87),
+                                  overflow: TextOverflow.ellipsis,
+                                ),
                               ),
-                              child: Text(
-                                order['id'] as String,
-                                style: GoogleFonts.poppins(fontWeight: FontWeight.bold, fontSize: 13, color: color),
-                              ),
-                            ),
-                            title: Text(
-                              order['name'] as String,
-                              style: GoogleFonts.poppins(fontWeight: FontWeight.w600, fontSize: 14),
-                            ),
-                            subtitle: Text(
-                              '${order['time']} • Payment: ${order['method']}',
-                              style: GoogleFonts.poppins(fontSize: 12, color: Colors.grey.shade600),
-                            ),
-                            trailing: Row(
-                              mainAxisSize: MainAxisSize.min,
+                            ],
+                          ),
+                          subtitle: Padding(
+                            padding: const EdgeInsets.only(top: 2),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
                                 Text(
-                                  order['amount'] as String,
-                                  style: GoogleFonts.poppins(fontWeight: FontWeight.w700, fontSize: 15),
+                                  '${order.formattedDateTime}  •  ${order.itemsSummary}',
+                                  style: GoogleFonts.poppins(
+                                      fontSize: 11,
+                                      color: Colors.grey.shade600),
+                                  maxLines: 2,
+                                  overflow: TextOverflow.ellipsis,
                                 ),
-                                const SizedBox(width: 14),
-                                InkWell(
-                                  onTap: () => _cycleStatus(originalIndex),
-                                  borderRadius: BorderRadius.circular(8),
-                                  child: Container(
-                                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                                    decoration: BoxDecoration(
-                                      color: color.withValues(alpha: 0.15),
-                                      borderRadius: BorderRadius.circular(8),
-                                    ),
-                                    child: Text(
-                                      order['status'] as String,
-                                      style: GoogleFonts.poppins(
-                                        fontSize: 12,
-                                        color: color,
-                                        fontWeight: FontWeight.w600,
-                                      ),
-                                    ),
-                                  ),
+                                const SizedBox(height: 2),
+                                Text(
+                                  'Payment: ${order.paymentMethod}',
+                                  style: GoogleFonts.poppins(
+                                      fontSize: 11,
+                                      color: Colors.grey.shade500),
                                 ),
                               ],
                             ),
-                          );
-                        },
-                      ),
+                          ),
+                          trailing: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Text(
+                                '₱${order.total.toStringAsFixed(0)}',
+                                style: GoogleFonts.poppins(
+                                    fontWeight: FontWeight.w700, fontSize: 14),
+                              ),
+                              const SizedBox(width: 12),
+                              isUpdating
+                                  ? const SizedBox(
+                                      width: 18,
+                                      height: 18,
+                                      child: CircularProgressIndicator(
+                                          strokeWidth: 2),
+                                    )
+                                  : InkWell(
+                                      onTap: () => _showStatusPicker(
+                                          order.id, order.status),
+                                      borderRadius:
+                                          BorderRadius.circular(8),
+                                      child: Container(
+                                        padding: const EdgeInsets.symmetric(
+                                            horizontal: 10, vertical: 6),
+                                        decoration: BoxDecoration(
+                                          color:
+                                              color.withValues(alpha: 0.15),
+                                          borderRadius:
+                                              BorderRadius.circular(8),
+                                        ),
+                                        child: Row(
+                                          mainAxisSize: MainAxisSize.min,
+                                          children: [
+                                            Text(
+                                              order.status,
+                                              style: GoogleFonts.poppins(
+                                                fontSize: 12,
+                                                color: color,
+                                                fontWeight: FontWeight.w600,
+                                              ),
+                                            ),
+                                            const SizedBox(width: 4),
+                                            Icon(Icons.expand_more,
+                                                size: 16, color: color),
+                                          ],
+                                        ),
+                                      ),
+                                    ),
+                            ],
+                          ),
+                        );
+                      },
+                    );
+                  },
+                ),
               ),
             ),
           ],
         ),
       ),
     );
+  }
+}
+
+// ---------- Admin-side order model ----------
+class _AdminOrder {
+  final String id;
+  final String orderNumber;
+  final String status;
+  final String userId;
+  final String paymentMethod;
+  final DateTime? createdAt;
+  final double total;
+  final List<Map<String, dynamic>> items;
+
+  _AdminOrder({
+    required this.id,
+    required this.orderNumber,
+    required this.status,
+    required this.userId,
+    required this.paymentMethod,
+    required this.createdAt,
+    required this.total,
+    required this.items,
+  });
+
+  factory _AdminOrder.fromDoc(DocumentSnapshot doc) {
+    final data = doc.data() as Map<String, dynamic>;
+    final rawItems = (data['items'] as List?) ?? const [];
+    return _AdminOrder(
+      id: doc.id,
+      orderNumber: (data['orderNumber'] ?? doc.id.substring(0, 8))
+          .toString()
+          .toUpperCase(),
+      status: (data['status'] ?? 'Pending').toString(),
+      userId: (data['userId'] ?? '').toString(),
+      paymentMethod: (data['paymentMethod'] ?? 'Credits').toString(),
+      createdAt: (data['createdAt'] as Timestamp?)?.toDate(),
+      total: (data['total'] as num?)?.toDouble() ?? 0.0,
+      items: rawItems
+          .whereType<Map>()
+          .map((e) => Map<String, dynamic>.from(e))
+          .toList(),
+    );
+  }
+
+  String get itemsSummary {
+    if (items.isEmpty) return 'No items';
+    return items
+        .map((e) => '${e['name'] ?? 'Item'} x${e['quantity'] ?? 1}')
+        .join(', ');
+  }
+
+  String get formattedDateTime {
+    if (createdAt == null) return '';
+    final local = createdAt!.toLocal();
+    final months = [
+      'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+      'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec',
+    ];
+    final hour12 = local.hour % 12 == 0 ? 12 : local.hour % 12;
+    final ampm = local.hour >= 12 ? 'PM' : 'AM';
+    final minute = local.minute.toString().padLeft(2, '0');
+    return '${months[local.month - 1]} ${local.day}, $hour12:$minute $ampm';
   }
 }
 
