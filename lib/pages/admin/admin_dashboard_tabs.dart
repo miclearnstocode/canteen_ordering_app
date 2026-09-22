@@ -6,6 +6,9 @@ import 'package:flutter/foundation.dart' show kIsWeb, Uint8List;
 import '../../models/menu_item_model.dart';
 import '../../helpers/image_picker_helper.dart';
 import '../../services/cloudinary_service.dart';
+import '../../services/inventory_service.dart';
+import '../../models/inventory_item_model.dart';
+import '../../widgets/unit_picker_field.dart';
 
 class AdminDashboardPage extends StatelessWidget {
   const AdminDashboardPage({super.key});
@@ -196,9 +199,7 @@ class AdminDashboardPage extends StatelessWidget {
   }
 }
 
-// ==========================================
-// 2. ADMIN ORDERS PAGE (Firestore-backed)
-// ==========================================
+// 2. ADMIN ORDERS PAGE 
 class AdminOrdersPage extends StatefulWidget {
   const AdminOrdersPage({super.key});
 
@@ -708,53 +709,73 @@ class _AdminOrder {
   }
 }
 
-// ==========================================
-// 3. ADMIN MENU MANAGEMENT PAGE (Firebase with Image)
-// ==========================================
+// 3. ADMIN MENU MANAGEMENT PAGE
 class AdminMenuManagementPage extends StatefulWidget {
   const AdminMenuManagementPage({super.key});
 
   @override
-  State<AdminMenuManagementPage> createState() => _AdminMenuManagementPageState();
+  State<AdminMenuManagementPage> createState() =>
+      _AdminMenuManagementPageState();
 }
 
 class _AdminMenuManagementPageState extends State<AdminMenuManagementPage> {
   final Color adminPurple = const Color(0xFF5E35B1);
   final Color green = const Color(0xFF2E7D32);
-  final CollectionReference _menuCollection = FirebaseFirestore.instance.collection('menu_items');
+  final CollectionReference _menuCollection =
+      FirebaseFirestore.instance.collection('menu_items');
 
-  // Add new item with image (uploaded to Cloudinary, image_url saved to Firebase)
+  // ADD ITEM — also auto-creates missing ingredients
   Future<void> _addItem(MenuItemModel item, XFile? imageFile) async {
     String? imageUrl;
-    
-    // Upload image to Cloudinary if selected
+
     if (imageFile != null) {
-      imageUrl = await CloudinaryService.uploadImage(imageFile, folder: 'menu_items');
+      imageUrl = await CloudinaryService.uploadImage(imageFile,
+          folder: 'menu_items');
     }
-    
-    // Add item with image_url to Firebase Firestore
-    final itemWithImage = item.copyWith(imageUrl: imageUrl);
+
+    // Make sure every ingredient in the recipe exists in `inventory`.
+    // Missing ones get auto-created with stock 0.
+    final resolvedRecipe =
+        await InventoryService.ensureIngredientsExist(item.recipe);
+
+    final itemWithImage = item.copyWith(
+      imageUrl: imageUrl,
+      recipe: resolvedRecipe,
+    );
+
     await _menuCollection.add(itemWithImage.toMap());
   }
 
-  // Update item with image (uploaded to Cloudinary, image_url saved to Firebase)
-  Future<void> _updateItem(String id, MenuItemModel updatedItem, XFile? imageFile) async {
+  // ─────────────────────────────────────────────
+  // UPDATE ITEM — re-syncs recipe to inventory
+  // ─────────────────────────────────────────────
+  Future<void> _updateItem(
+      String id, MenuItemModel updatedItem, XFile? imageFile) async {
     String? imageUrl = updatedItem.imageUrl;
-    
-    // Upload new image to Cloudinary if selected
+
     if (imageFile != null) {
-      imageUrl = await CloudinaryService.uploadImage(imageFile, folder: 'menu_items');
+      imageUrl = await CloudinaryService.uploadImage(imageFile,
+          folder: 'menu_items');
     }
-    
-    // Update item with image_url in Firebase Firestore
-    final itemWithImage = updatedItem.copyWith(imageUrl: imageUrl);
+
+    // Ensure any newly-added ingredient rows exist in inventory.
+    final resolvedRecipe =
+        await InventoryService.ensureIngredientsExist(updatedItem.recipe);
+
+    final itemWithImage = updatedItem.copyWith(
+      imageUrl: imageUrl,
+      recipe: resolvedRecipe,
+    );
+
     await _menuCollection.doc(id).update(itemWithImage.toMap());
   }
 
-  // Delete item from Firebase
+  // ─────────────────────────────────────────────
+  // DELETE ITEM
+  // ─────────────────────────────────────────────
   Future<void> _deleteItem(String id, String? imageUrl) async {
-    // Delete document from Firestore
     await _menuCollection.doc(id).delete();
+    // Optional: also delete unused inventory entries here.
   }
 
   @override
@@ -769,7 +790,9 @@ class _AdminMenuManagementPageState extends State<AdminMenuManagementPage> {
             Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
-                Text('Menu Management', style: GoogleFonts.poppins(fontSize: 24, fontWeight: FontWeight.w700)),
+                Text('Menu Management',
+                    style: GoogleFonts.poppins(
+                        fontSize: 24, fontWeight: FontWeight.w700)),
                 ElevatedButton.icon(
                   onPressed: () => _showAddItemDialog(context),
                   icon: const Icon(Icons.add, size: 18),
@@ -777,16 +800,18 @@ class _AdminMenuManagementPageState extends State<AdminMenuManagementPage> {
                   style: ElevatedButton.styleFrom(
                     backgroundColor: adminPurple,
                     foregroundColor: Colors.white,
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                    shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(10)),
                   ),
                 ),
               ],
             ),
             const SizedBox(height: 4),
-            Text('Tap to edit • Swipe left to delete', style: GoogleFonts.poppins(fontSize: 13, color: Colors.grey.shade600)),
+            Text('Tap to edit • Swipe left to delete',
+                style: GoogleFonts.poppins(
+                    fontSize: 13, color: Colors.grey.shade600)),
             const SizedBox(height: 16),
-            
-            // Firebase StreamBuilder
+
             Expanded(
               child: Container(
                 padding: const EdgeInsets.all(16),
@@ -799,13 +824,15 @@ class _AdminMenuManagementPageState extends State<AdminMenuManagementPage> {
                   stream: _menuCollection.orderBy('name').snapshots(),
                   builder: (context, snapshot) {
                     if (snapshot.hasError) {
-                      return Center(child: Text('Error: ${snapshot.error}'));
+                      return Center(
+                          child: Text('Error: ${snapshot.error}'));
                     }
-
-                    if (snapshot.connectionState == ConnectionState.waiting) {
-                      return const Center(child: CircularProgressIndicator(color: Color(0xFF5E35B1)));
+                    if (snapshot.connectionState ==
+                        ConnectionState.waiting) {
+                      return const Center(
+                          child: CircularProgressIndicator(
+                              color: Color(0xFF5E35B1)));
                     }
-
                     if (snapshot.data!.docs.isEmpty) {
                       return _buildEmptyState();
                     }
@@ -814,10 +841,12 @@ class _AdminMenuManagementPageState extends State<AdminMenuManagementPage> {
 
                     return ListView.separated(
                       itemCount: docs.length,
-                      separatorBuilder: (context, i) => Divider(color: Colors.grey.shade100),
+                      separatorBuilder: (context, i) =>
+                          Divider(color: Colors.grey.shade100),
                       itemBuilder: (context, index) {
                         final doc = docs[index];
-                        final item = MenuItemModel.fromMap(doc.id, doc.data() as Map<String, dynamic>);
+                        final item = MenuItemModel.fromMap(
+                            doc.id, doc.data() as Map<String, dynamic>);
 
                         return Dismissible(
                           key: Key(doc.id),
@@ -827,17 +856,30 @@ class _AdminMenuManagementPageState extends State<AdminMenuManagementPage> {
                               context: context,
                               builder: (BuildContext context) {
                                 return AlertDialog(
-                                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-                                  title: Text('Delete Item?', style: GoogleFonts.poppins(fontWeight: FontWeight.bold)),
-                                  content: Text('Are you sure you want to delete "${item.name}"? This action cannot be undone.'),
+                                  shape: RoundedRectangleBorder(
+                                      borderRadius:
+                                          BorderRadius.circular(16)),
+                                  title: Text('Delete Item?',
+                                      style: GoogleFonts.poppins(
+                                          fontWeight:
+                                              FontWeight.bold)),
+                                  content: Text(
+                                      'Are you sure you want to delete "${item.name}"? This action cannot be undone.'),
                                   actions: [
                                     TextButton(
-                                      onPressed: () => Navigator.of(context).pop(false),
-                                      child: const Text('Cancel', style: TextStyle(color: Colors.grey)),
+                                      onPressed: () => Navigator.of(
+                                              context)
+                                          .pop(false),
+                                      child: const Text('Cancel',
+                                          style: TextStyle(
+                                              color: Colors.grey)),
                                     ),
                                     TextButton(
-                                      onPressed: () => Navigator.of(context).pop(true),
-                                      style: TextButton.styleFrom(foregroundColor: Colors.red),
+                                      onPressed: () => Navigator.of(
+                                              context)
+                                          .pop(true),
+                                      style: TextButton.styleFrom(
+                                          foregroundColor: Colors.red),
                                       child: const Text('Delete'),
                                     ),
                                   ],
@@ -848,43 +890,59 @@ class _AdminMenuManagementPageState extends State<AdminMenuManagementPage> {
                           onDismissed: (direction) {
                             _deleteItem(doc.id, item.imageUrl);
                             ScaffoldMessenger.of(context).showSnackBar(
-                              SnackBar(content: Text('Deleted "${item.name}"'), backgroundColor: Colors.red.shade400),
+                              SnackBar(
+                                  content:
+                                      Text('Deleted "${item.name}"'),
+                                  backgroundColor:
+                                      Colors.red.shade400),
                             );
                           },
                           background: Container(
                             alignment: Alignment.centerRight,
-                            padding: const EdgeInsets.symmetric(horizontal: 20),
-                            margin: const EdgeInsets.symmetric(vertical: 4),
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 20),
+                            margin: const EdgeInsets.symmetric(
+                                vertical: 4),
                             decoration: BoxDecoration(
                               color: Colors.red.shade600,
-                              borderRadius: BorderRadius.circular(12),
+                              borderRadius:
+                                  BorderRadius.circular(12),
                             ),
-                            child: const Icon(Icons.delete, color: Colors.white),
+                            child: const Icon(Icons.delete,
+                                color: Colors.white),
                           ),
                           child: Material(
                             color: Colors.transparent,
                             borderRadius: BorderRadius.circular(12),
                             child: ListTile(
-                              contentPadding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
-                              onTap: () => _showEditItemDialog(context, item),
+                              contentPadding:
+                                  const EdgeInsets.symmetric(
+                                      horizontal: 8, vertical: 8),
+                              onTap: () =>
+                                  _showEditItemDialog(context, item),
                               leading: Container(
                                 width: 56,
                                 height: 56,
                                 decoration: BoxDecoration(
-                                  borderRadius: BorderRadius.circular(12),
+                                  borderRadius:
+                                      BorderRadius.circular(12),
                                   color: Colors.grey.shade100,
                                   image: item.imageUrl != null
                                       ? DecorationImage(
-                                          image: NetworkImage(item.imageUrl!),
+                                          image: NetworkImage(
+                                              item.imageUrl!),
                                           fit: BoxFit.cover,
                                         )
                                       : null,
                                 ),
                                 child: item.imageUrl == null
                                     ? Icon(
-                                        item.category == 'Drinks' ? Icons.local_cafe : 
-                                        item.category == 'Snacks' ? Icons.fastfood : 
-                                        Icons.lunch_dining,
+                                        item.category == 'Drinks'
+                                            ? Icons.local_cafe
+                                            : item.category ==
+                                                    'Snacks'
+                                                ? Icons.fastfood
+                                                : Icons.lunch_dining,
                                         color: adminPurple,
                                         size: 28,
                                       )
@@ -898,10 +956,12 @@ class _AdminMenuManagementPageState extends State<AdminMenuManagementPage> {
                                 ),
                               ),
                               subtitle: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
+                                crossAxisAlignment:
+                                    CrossAxisAlignment.start,
                                 children: [
                                   Text(
-                                    '${item.category} • Stock: ${item.stock}',
+                                    '${item.category} • Stock: ${item.stock}'
+                                    '${item.recipe.isNotEmpty ? " • ${item.recipe.length} ingredient(s)" : ""}',
                                     style: GoogleFonts.poppins(
                                       fontSize: 12,
                                       color: Colors.grey.shade600,
@@ -922,8 +982,10 @@ class _AdminMenuManagementPageState extends State<AdminMenuManagementPage> {
                                 mainAxisSize: MainAxisSize.min,
                                 children: [
                                   Column(
-                                    crossAxisAlignment: CrossAxisAlignment.end,
-                                    mainAxisAlignment: MainAxisAlignment.center,
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.end,
+                                    mainAxisAlignment:
+                                        MainAxisAlignment.center,
                                     children: [
                                       Text(
                                         '₱${item.price.toStringAsFixed(0)}',
@@ -934,17 +996,29 @@ class _AdminMenuManagementPageState extends State<AdminMenuManagementPage> {
                                         ),
                                       ),
                                       Container(
-                                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                                        padding: const EdgeInsets
+                                            .symmetric(
+                                            horizontal: 8,
+                                            vertical: 3),
                                         decoration: BoxDecoration(
-                                          color: item.isAvailable ? Colors.green.shade50 : Colors.red.shade50,
-                                          borderRadius: BorderRadius.circular(6),
+                                          color: item.isAvailable
+                                              ? Colors.green.shade50
+                                              : Colors.red.shade50,
+                                          borderRadius:
+                                              BorderRadius.circular(6),
                                         ),
                                         child: Text(
-                                          item.isAvailable ? 'Available' : 'Unavailable',
+                                          item.isAvailable
+                                              ? 'Available'
+                                              : 'Unavailable',
                                           style: GoogleFonts.poppins(
                                             fontSize: 10,
-                                            fontWeight: FontWeight.w600,
-                                            color: item.isAvailable ? Colors.green.shade700 : Colors.red.shade700,
+                                            fontWeight:
+                                                FontWeight.w600,
+                                            color: item.isAvailable
+                                                ? Colors
+                                                    .green.shade700
+                                                : Colors.red.shade700,
                                           ),
                                         ),
                                       ),
@@ -960,7 +1034,6 @@ class _AdminMenuManagementPageState extends State<AdminMenuManagementPage> {
                               ),
                             ),
                           ),
-                                                  
                         );
                       },
                     );
@@ -974,7 +1047,9 @@ class _AdminMenuManagementPageState extends State<AdminMenuManagementPage> {
     );
   }
 
-  // Empty State Widget
+  // ─────────────────────────────────────────────
+  // EMPTY STATE
+  // ─────────────────────────────────────────────
   Widget _buildEmptyState() {
     return Center(
       child: Column(
@@ -986,17 +1061,22 @@ class _AdminMenuManagementPageState extends State<AdminMenuManagementPage> {
               color: adminPurple.withValues(alpha: 0.1),
               shape: BoxShape.circle,
             ),
-            child: Icon(Icons.restaurant_menu, size: 64, color: adminPurple),
+            child:
+                Icon(Icons.restaurant_menu, size: 64, color: adminPurple),
           ),
           const SizedBox(height: 20),
           Text(
             'No Menu Items Yet',
-            style: GoogleFonts.poppins(fontSize: 20, fontWeight: FontWeight.w700, color: Colors.black87),
+            style: GoogleFonts.poppins(
+                fontSize: 20,
+                fontWeight: FontWeight.w700,
+                color: Colors.black87),
           ),
           const SizedBox(height: 8),
           Text(
             'Click "Add New Item" to create your first menu item.',
-            style: GoogleFonts.poppins(fontSize: 14, color: Colors.grey.shade600),
+            style: GoogleFonts.poppins(
+                fontSize: 14, color: Colors.grey.shade600),
             textAlign: TextAlign.center,
           ),
         ],
@@ -1004,8 +1084,255 @@ class _AdminMenuManagementPageState extends State<AdminMenuManagementPage> {
     );
   }
 
-  // ADD ITEM with Image (Web Compatible)
-  void _showAddItemDialog(BuildContext context) {
+  // ─────────────────────────────────────────────
+  // INGREDIENT PICKER (shared by Add + Edit dialogs)
+  // Returns {ingredientId, ingredientName, unit, qtyPerPortion}
+  // ─────────────────────────────────────────────
+  Future<Map<String, dynamic>?> _pickIngredient(
+      BuildContext context) async {
+    final snap = await FirebaseFirestore.instance
+        .collection('inventory')
+        .orderBy('name')
+        .get();
+    final items = snap.docs
+        .map((d) => InventoryItemModel.fromMap(
+            d.id, d.data() as Map<String, dynamic>))
+        .toList();
+
+    if (!context.mounted) return null;
+
+    return showDialog<Map<String, dynamic>>(
+      context: context,
+      builder: (ctx) {
+        String q = '';
+        String unit = 'pcs';
+        final qtyCtrl = TextEditingController(text: '1');
+        InventoryItemModel? selected;
+
+        return StatefulBuilder(
+          builder: (ctx, setD) => AlertDialog(
+            shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(16)),
+            title: Text('Add Ingredient',
+                style:
+                    GoogleFonts.poppins(fontWeight: FontWeight.bold)),
+            content: SizedBox(
+              width: 380,
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  TextField(
+                    decoration: const InputDecoration(
+                      hintText: 'Search or type new name...',
+                      prefixIcon: Icon(Icons.search),
+                    ),
+                    onChanged: (v) =>
+                        setD(() => q = v.trim().toLowerCase()),
+                  ),
+                  const SizedBox(height: 8),
+                  if (items.isNotEmpty)
+                    ConstrainedBox(
+                      constraints:
+                          const BoxConstraints(maxHeight: 200),
+                      child: ListView(
+                        shrinkWrap: true,
+                        children: items
+                            .where((i) => i.name
+                                .toLowerCase()
+                                .contains(q))
+                            .map((i) => ListTile(
+                                  dense: true,
+                                  title: Text(i.name),
+                                  subtitle: Text(
+                                      '${i.stock} ${i.unit} in stock'),
+                                  selected: selected?.id == i.id,
+                                  trailing: selected?.id == i.id
+                                      ? const Icon(Icons.check,
+                                          color: Color(0xFF5E35B1))
+                                      : null,
+                                  onTap: () =>
+                                      setD(() => selected = i),
+                                ))
+                            .toList(),
+                      ),
+                    ),
+                  const SizedBox(height: 8),
+                  if (selected == null && q.isNotEmpty)
+                    Container(
+                      width: double.infinity,
+                      padding: const EdgeInsets.all(10),
+                      decoration: BoxDecoration(
+                        color: Colors.amber.shade50,
+                        borderRadius: BorderRadius.circular(8),
+                        border: Border.all(
+                            color: Colors.amber.shade200),
+                      ),
+                      child: Text(
+                        'New ingredient "$q" will be created in inventory with 0 stock.',
+                        style: GoogleFonts.poppins(
+                            fontSize: 11,
+                            color: Colors.amber.shade900),
+                      ),
+                    ),
+                  const SizedBox(height: 8),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: TextField(
+                          controller: qtyCtrl,
+                          keyboardType: TextInputType.number,
+                          decoration: const InputDecoration(
+                              labelText: 'Qty per portion'),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      SizedBox(
+                        width: 110,
+                        child: UnitPickerField(
+                          value: unit,
+                          onChanged: (v) => setD(() => unit = v),
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(ctx),
+                child: const Text('Cancel'),
+              ),
+              ElevatedButton(
+                onPressed: () {
+                  final qty = double.tryParse(qtyCtrl.text) ?? 1;
+                  if (qty <= 0) return;
+
+                  if (selected != null) {
+                    Navigator.pop(ctx, {
+                      'ingredientId': selected!.id,
+                      'ingredientName': selected!.name,
+                      'unit': selected!.unit,
+                      'qtyPerPortion': qty,
+                    });
+                  } else if (q.isNotEmpty) {
+                    Navigator.pop(ctx, {
+                      'ingredientId': '',
+                      'ingredientName': q,
+                      'unit': unit,
+                      'qtyPerPortion': qty,
+                    });
+                  }
+                },
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: adminPurple,
+                  foregroundColor: Colors.white,
+                ),
+                child: const Text('Add'),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  // ─────────────────────────────────────────────
+  // SHARED RECIPE EDITOR UI
+  // ─────────────────────────────────────────────
+  Widget _buildRecipeSection({
+    required BuildContext ctx,
+    required List<Map<String, dynamic>> rows,
+    required void Function(VoidCallback) setModalState,
+  }) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: [
+            Text('Recipe (per portion)',
+                style: GoogleFonts.poppins(
+                    fontWeight: FontWeight.w600, fontSize: 13)),
+            TextButton.icon(
+              onPressed: () async {
+                final picked = await _pickIngredient(ctx);
+                if (picked != null) {
+                  setModalState(() => rows.add(picked));
+                }
+              },
+              icon: const Icon(Icons.add, size: 16),
+              label: const Text('Add'),
+            ),
+          ],
+        ),
+        if (rows.isEmpty)
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              color: Colors.grey.shade50,
+              borderRadius: BorderRadius.circular(10),
+              border: Border.all(color: Colors.grey.shade200),
+            ),
+            child: Text(
+              'No ingredients yet. Tap "Add" to link to inventory.',
+              style: GoogleFonts.poppins(
+                  fontSize: 12, color: Colors.grey.shade600),
+            ),
+          )
+        else
+          Column(
+            children: rows.asMap().entries.map((e) {
+              final i = e.key;
+              final r = e.value;
+              return Container(
+                margin: const EdgeInsets.only(bottom: 8),
+                padding: const EdgeInsets.symmetric(
+                    horizontal: 12, vertical: 8),
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(color: Colors.grey.shade200),
+                ),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(r['ingredientName'],
+                              style: GoogleFonts.poppins(
+                                  fontWeight: FontWeight.w600,
+                                  fontSize: 13)),
+                          Text(
+                            '${r['qtyPerPortion']} ${r['unit']} per portion',
+                            style: GoogleFonts.poppins(
+                                fontSize: 11,
+                                color: Colors.grey.shade600),
+                          ),
+                        ],
+                      ),
+                    ),
+                    IconButton(
+                      icon: const Icon(Icons.close,
+                          size: 18, color: Colors.red),
+                      onPressed: () =>
+                          setModalState(() => rows.removeAt(i)),
+                    ),
+                  ],
+                ),
+              );
+            }).toList(),
+          ),
+      ],
+    );
+  }
+
+  // ─────────────────────────────────────────────
+  // ADD ITEM DIALOG
+  // ─────────────────────────────────────────────
+  void _showAddItemDialog(BuildContext outerCtx) {
     final nameController = TextEditingController();
     final priceController = TextEditingController();
     final stockController = TextEditingController();
@@ -1014,159 +1341,172 @@ class _AdminMenuManagementPageState extends State<AdminMenuManagementPage> {
     bool isAvailable = true;
     XFile? selectedImage;
     bool isUploading = false;
+    List<Map<String, dynamic>> recipeRows = [];
 
     showModalBottomSheet(
-      context: context,
+      context: outerCtx,
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
       builder: (context) => StatefulBuilder(
         builder: (context, setModalState) {
           return Container(
-            decoration: const BoxDecoration(color: Colors.white, borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
-            padding: EdgeInsets.only(bottom: MediaQuery.of(context).viewInsets.bottom),
+            decoration: const BoxDecoration(
+              color: Colors.white,
+              borderRadius:
+                  BorderRadius.vertical(top: Radius.circular(20)),
+            ),
+            padding: EdgeInsets.only(
+                bottom: MediaQuery.of(context).viewInsets.bottom),
             child: SingleChildScrollView(
               padding: const EdgeInsets.all(24),
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Center(child: Container(width: 40, height: 4, decoration: BoxDecoration(color: Colors.grey.shade300, borderRadius: BorderRadius.circular(2)))),
+                  Center(
+                      child: Container(
+                          width: 40,
+                          height: 4,
+                          decoration: BoxDecoration(
+                              color: Colors.grey.shade300,
+                              borderRadius:
+                                  BorderRadius.circular(2)))),
                   const SizedBox(height: 20),
                   Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    mainAxisAlignment:
+                        MainAxisAlignment.spaceBetween,
                     children: [
-                      Text('Add New Menu Item', style: GoogleFonts.poppins(fontSize: 20, fontWeight: FontWeight.w700)),
-                      IconButton(onPressed: () => Navigator.pop(context), icon: const Icon(Icons.close), color: Colors.grey.shade600),
+                      Text('Add New Menu Item',
+                          style: GoogleFonts.poppins(
+                              fontSize: 20,
+                              fontWeight: FontWeight.w700)),
+                      IconButton(
+                          onPressed: () => Navigator.pop(context),
+                          icon: const Icon(Icons.close),
+                          color: Colors.grey.shade600),
                     ],
                   ),
                   const SizedBox(height: 20),
 
-                  Container(
-                    width: double.infinity,
-                    height: 150,
-                    decoration: BoxDecoration(
-                      color: Colors.grey.shade50,
-                      borderRadius: BorderRadius.circular(12),
-                      border: Border.all(color: Colors.grey.shade300),
-                    ),
-                    child: selectedImage != null
-                        ? Stack(
-                            children: [
-                              ClipRRect(
-                                borderRadius: BorderRadius.circular(12),
-                                child: FutureBuilder<Uint8List>(
-                                  future: selectedImage!.readAsBytes(),
-                                  builder: (context, snapshot) {
-                                    if (snapshot.hasData && snapshot.data != null) {
-                                      return Image.memory(
-                                        snapshot.data!,
-                                        width: double.infinity,
-                                        height: 150,
-                                        fit: BoxFit.cover,
-                                      );
-                                    } else if (snapshot.hasError) {
-                                      return Container(
-                                        color: Colors.grey.shade200,
-                                        child: const Icon(Icons.broken_image, size: 50, color: Colors.grey),
-                                      );
-                                    } else {
-                                      return const Center(
-                                        child: CircularProgressIndicator(),
-                                      );
-                                    }
-                                  },
-                                ),
-                              ),
-                              Positioned(
-                                top: 8,
-                                right: 8,
-                                child: CircleAvatar(
-                                  backgroundColor: Colors.black.withValues(alpha: 0.7),
-                                  radius: 18,
-                                  child: IconButton(
-                                    icon: const Icon(Icons.close, color: Colors.white, size: 16),
-                                    onPressed: () {
-                                      setModalState(() => selectedImage = null);
-                                    },
-                                    padding: EdgeInsets.zero,
-                                  ),
-                                ),
-                              ),
-                            ],
-                          )
-                        : InkWell(
-                            onTap: () async {
-                              final XFile? image = await ImagePickerHelper.pickImage();
-                              if (image != null) {
-                                setModalState(() => selectedImage = image);
-                              }
-                            },
-                            child: Column(
-                              mainAxisAlignment: MainAxisAlignment.center,
-                              children: [
-                                Icon(
-                                  kIsWeb ? Icons.cloud_upload : Icons.photo_library,
-                                  size: 48,
-                                  color: Colors.grey.shade400,
-                                ),
-                                const SizedBox(height: 8),
-                                Text(
-                                  kIsWeb ? 'Click to select image' : 'Tap to upload image',
-                                  style: GoogleFonts.poppins(
-                                    color: Colors.grey.shade500,
-                                    fontSize: 14,
-                                  ),
-                                ),
-                                Text(
-                                  'Supports PNG, JPG, GIF, WEBP',
-                                  style: GoogleFonts.poppins(
-                                    color: Colors.grey.shade400,
-                                    fontSize: 12,
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ),
+                  // Image picker
+                  _buildImagePicker(
+                    context: context,
+                    selectedImage: selectedImage,
+                    existingImageUrl: null,
+                    hintLine1: kIsWeb
+                        ? 'Click to select image'
+                        : 'Tap to upload image',
+                    hintLine2: 'Supports PNG, JPG, GIF, WEBP',
+                    onPick: (img) =>
+                        setModalState(() => selectedImage = img),
+                    onClear: () =>
+                        setModalState(() => selectedImage = null),
                   ),
-                                    
                   const SizedBox(height: 16),
 
-                  Text('Food Name', style: GoogleFonts.poppins(fontWeight: FontWeight.w600, fontSize: 13)),
+                  Text('Food Name',
+                      style: GoogleFonts.poppins(
+                          fontWeight: FontWeight.w600, fontSize: 13)),
                   const SizedBox(height: 6),
-                  TextField(controller: nameController, decoration: InputDecoration(hintText: 'e.g. Chicken Meal', border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)), contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12))),
+                  TextField(
+                      controller: nameController,
+                      decoration: InputDecoration(
+                          hintText: 'e.g. Chicken Meal',
+                          border: OutlineInputBorder(
+                              borderRadius: BorderRadius.circular(10)),
+                          contentPadding: const EdgeInsets.symmetric(
+                              horizontal: 14, vertical: 12))),
                   const SizedBox(height: 16),
 
-                  Text('Category', style: GoogleFonts.poppins(fontWeight: FontWeight.w600, fontSize: 13)),
+                  Text('Category',
+                      style: GoogleFonts.poppins(
+                          fontWeight: FontWeight.w600, fontSize: 13)),
                   const SizedBox(height: 6),
                   DropdownButtonFormField<String>(
                     initialValue: selectedCategory,
-                    decoration: InputDecoration(border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)), contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12)),
-                    items: ['Meals', 'Snacks', 'Drinks', 'Desserts', 'Pastas'].map((cat) => DropdownMenuItem(value: cat, child: Text(cat))).toList(),
-                    onChanged: (val) { if (val != null) setModalState(() => selectedCategory = val); },
+                    decoration: InputDecoration(
+                        border: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(10)),
+                        contentPadding: const EdgeInsets.symmetric(
+                            horizontal: 14, vertical: 12)),
+                    items: ['Meals', 'Snacks', 'Drinks', 'Desserts', 'Pastas']
+                        .map((cat) => DropdownMenuItem(
+                            value: cat, child: Text(cat)))
+                        .toList(),
+                    onChanged: (val) {
+                      if (val != null) {
+                        setModalState(() => selectedCategory = val);
+                      }
+                    },
                   ),
                   const SizedBox(height: 16),
 
-                  Text('Price (₱)', style: GoogleFonts.poppins(fontWeight: FontWeight.w600, fontSize: 13)),
+                  Text('Price (₱)',
+                      style: GoogleFonts.poppins(
+                          fontWeight: FontWeight.w600, fontSize: 13)),
                   const SizedBox(height: 6),
-                  TextField(controller: priceController, keyboardType: TextInputType.number, decoration: InputDecoration(hintText: 'e.g. 75', prefixText: '₱ ', border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)), contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12))),
+                  TextField(
+                      controller: priceController,
+                      keyboardType: TextInputType.number,
+                      decoration: InputDecoration(
+                          hintText: 'e.g. 75',
+                          prefixText: '₱ ',
+                          border: OutlineInputBorder(
+                              borderRadius: BorderRadius.circular(10)),
+                          contentPadding: const EdgeInsets.symmetric(
+                              horizontal: 14, vertical: 12))),
                   const SizedBox(height: 16),
 
-                  Text('Stock Quantity', style: GoogleFonts.poppins(fontWeight: FontWeight.w600, fontSize: 13)),
+                  Text('Stock Quantity',
+                      style: GoogleFonts.poppins(
+                          fontWeight: FontWeight.w600, fontSize: 13)),
                   const SizedBox(height: 6),
-                  TextField(controller: stockController, keyboardType: TextInputType.number, decoration: InputDecoration(hintText: 'e.g. 20', prefixIcon: const Icon(Icons.inventory_2_outlined, size: 20), border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)), contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12))),
+                  TextField(
+                      controller: stockController,
+                      keyboardType: TextInputType.number,
+                      decoration: InputDecoration(
+                          hintText: 'e.g. 20',
+                          prefixIcon: const Icon(
+                              Icons.inventory_2_outlined,
+                              size: 20),
+                          border: OutlineInputBorder(
+                              borderRadius: BorderRadius.circular(10)),
+                          contentPadding: const EdgeInsets.symmetric(
+                              horizontal: 14, vertical: 12))),
                   const SizedBox(height: 16),
 
-                  Text('Description', style: GoogleFonts.poppins(fontWeight: FontWeight.w600, fontSize: 13)),
+                  Text('Description',
+                      style: GoogleFonts.poppins(
+                          fontWeight: FontWeight.w600, fontSize: 13)),
                   const SizedBox(height: 6),
-                  TextField(controller: descController, maxLines: 3, decoration: InputDecoration(hintText: 'Enter food details...', border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)), contentPadding: const EdgeInsets.all(12))),
+                  TextField(
+                      controller: descController,
+                      maxLines: 3,
+                      decoration: InputDecoration(
+                          hintText: 'Enter food details...',
+                          border: OutlineInputBorder(
+                              borderRadius: BorderRadius.circular(10)),
+                          contentPadding: const EdgeInsets.all(12))),
+                  const SizedBox(height: 16),
+
+                  // ── RECIPE SECTION ──
+                  _buildRecipeSection(
+                    ctx: context,
+                    rows: recipeRows,
+                    setModalState: setModalState,
+                  ),
                   const SizedBox(height: 16),
 
                   SwitchListTile(
                     contentPadding: EdgeInsets.zero,
-                    title: Text('Available for ordering today', style: GoogleFonts.poppins(fontWeight: FontWeight.w500)),
+                    title: Text(
+                        'Available for ordering today',
+                        style: GoogleFonts.poppins(
+                            fontWeight: FontWeight.w500)),
                     value: isAvailable,
                     activeThumbColor: green,
-                    onChanged: (val) => setModalState(() => isAvailable = val),
+                    onChanged: (val) =>
+                        setModalState(() => isAvailable = val),
                   ),
                   const SizedBox(height: 24),
 
@@ -1177,40 +1517,74 @@ class _AdminMenuManagementPageState extends State<AdminMenuManagementPage> {
                           onPressed: isUploading
                               ? null
                               : () async {
-                                  if (nameController.text.isNotEmpty && priceController.text.isNotEmpty) {
-                                    setModalState(() => isUploading = true);
-                                    try {
-                                      final newItem = MenuItemModel(
-                                        id: '',
-                                        name: nameController.text,
-                                        category: selectedCategory,
-                                        price: double.tryParse(priceController.text) ?? 0,
-                                        description: descController.text,
-                                        stock: int.tryParse(stockController.text) ?? 0,
-                                        isAvailable: isAvailable,
-                                      );
-                                      await _addItem(newItem, selectedImage);
-                                      if (context.mounted) {
-                                        Navigator.pop(context);
-                                        ScaffoldMessenger.of(context).showSnackBar(
-                                          SnackBar(content: Text('Added "${newItem.name}" successfully!'), backgroundColor: green),
-                                        );
-                                      }
-                                    } catch (e) {
-                                      setModalState(() => isUploading = false);
-                                      if (context.mounted) {
-                                        ScaffoldMessenger.of(context).showSnackBar(
-                                          SnackBar(content: Text('Error adding item: $e'), backgroundColor: Colors.red),
-                                        );
-                                      }
+                                  if (nameController.text.isEmpty ||
+                                      priceController.text.isEmpty) {
+                                    return;
+                                  }
+                                  setModalState(
+                                      () => isUploading = true);
+                                  try {
+                                    final recipe = recipeRows
+                                        .map((r) => RecipeIngredient(
+                                              ingredientId: r[
+                                                      'ingredientId'] ??
+                                                  '',
+                                              ingredientName:
+                                                  r['ingredientName'],
+                                              unit: r['unit'],
+                                              qtyPerPortion:
+                                                  (r['qtyPerPortion']
+                                                          as num)
+                                                      .toDouble(),
+                                            ))
+                                        .toList();
+
+                                    final newItem = MenuItemModel(
+                                      id: '',
+                                      name: nameController.text,
+                                      category: selectedCategory,
+                                      price: double.tryParse(
+                                              priceController.text) ??
+                                          0,
+                                      description: descController.text,
+                                      stock: int.tryParse(
+                                              stockController.text) ??
+                                          0,
+                                      isAvailable: isAvailable,
+                                      recipe: recipe,
+                                    );
+                                    await _addItem(
+                                        newItem, selectedImage);
+                                    if (context.mounted) {
+                                      Navigator.pop(context);
+                                      ScaffoldMessenger.of(context)
+                                          .showSnackBar(SnackBar(
+                                        content: Text(
+                                            'Added "${newItem.name}" successfully!'),
+                                        backgroundColor: green,
+                                      ));
+                                    }
+                                  } catch (e) {
+                                    setModalState(
+                                        () => isUploading = false);
+                                    if (context.mounted) {
+                                      ScaffoldMessenger.of(context)
+                                          .showSnackBar(SnackBar(
+                                        content:
+                                            Text('Error adding item: $e'),
+                                        backgroundColor: Colors.red,
+                                      ));
                                     }
                                   }
                                 },
                           style: ElevatedButton.styleFrom(
                             backgroundColor: adminPurple,
                             foregroundColor: Colors.white,
-                            padding: const EdgeInsets.symmetric(vertical: 14),
-                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                            padding: const EdgeInsets.symmetric(
+                                vertical: 14),
+                            shape: RoundedRectangleBorder(
+                                borderRadius:
+                                    BorderRadius.circular(10)),
                           ),
                           child: isUploading
                               ? const SizedBox(
@@ -1227,10 +1601,15 @@ class _AdminMenuManagementPageState extends State<AdminMenuManagementPage> {
                       const SizedBox(width: 12),
                       Expanded(
                         child: OutlinedButton(
-                          onPressed: isUploading ? null : () => Navigator.pop(context),
+                          onPressed: isUploading
+                              ? null
+                              : () => Navigator.pop(context),
                           style: OutlinedButton.styleFrom(
-                            padding: const EdgeInsets.symmetric(vertical: 14),
-                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                            padding: const EdgeInsets.symmetric(
+                                vertical: 14),
+                            shape: RoundedRectangleBorder(
+                                borderRadius:
+                                    BorderRadius.circular(10)),
                           ),
                           child: const Text('Cancel'),
                         ),
@@ -1246,205 +1625,203 @@ class _AdminMenuManagementPageState extends State<AdminMenuManagementPage> {
     );
   }
 
-  // EDIT ITEM with Image (Web Compatible)
-  void _showEditItemDialog(BuildContext context, MenuItemModel item) {
+  // ─────────────────────────────────────────────
+  // EDIT ITEM DIALOG
+  // ─────────────────────────────────────────────
+  void _showEditItemDialog(BuildContext outerCtx, MenuItemModel item) {
     final nameController = TextEditingController(text: item.name);
-    final priceController = TextEditingController(text: item.price.toString());
-    final stockController = TextEditingController(text: item.stock.toString());
-    final descController = TextEditingController(text: item.description);
+    final priceController =
+        TextEditingController(text: item.price.toString());
+    final stockController =
+        TextEditingController(text: item.stock.toString());
+    final descController =
+        TextEditingController(text: item.description);
     String selectedCategory = item.category;
     bool isAvailable = item.isAvailable;
     XFile? selectedImage;
     bool isUploading = false;
     String? existingImageUrl = item.imageUrl;
 
+    // Seed recipe rows from the existing item.
+    List<Map<String, dynamic>> recipeRows = item.recipe
+        .map((r) => {
+              'ingredientId': r.ingredientId,
+              'ingredientName': r.ingredientName,
+              'unit': r.unit,
+              'qtyPerPortion': r.qtyPerPortion,
+            })
+        .toList();
+
     showModalBottomSheet(
-      context: context,
+      context: outerCtx,
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
       builder: (context) => StatefulBuilder(
         builder: (context, setModalState) {
           return Container(
-            decoration: const BoxDecoration(color: Colors.white, borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
-            padding: EdgeInsets.only(bottom: MediaQuery.of(context).viewInsets.bottom),
+            decoration: const BoxDecoration(
+              color: Colors.white,
+              borderRadius:
+                  BorderRadius.vertical(top: Radius.circular(20)),
+            ),
+            padding: EdgeInsets.only(
+                bottom: MediaQuery.of(context).viewInsets.bottom),
             child: SingleChildScrollView(
               padding: const EdgeInsets.all(24),
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Center(child: Container(width: 40, height: 4, decoration: BoxDecoration(color: Colors.grey.shade300, borderRadius: BorderRadius.circular(2)))),
+                  Center(
+                      child: Container(
+                          width: 40,
+                          height: 4,
+                          decoration: BoxDecoration(
+                              color: Colors.grey.shade300,
+                              borderRadius:
+                                  BorderRadius.circular(2)))),
                   const SizedBox(height: 20),
                   Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    mainAxisAlignment:
+                        MainAxisAlignment.spaceBetween,
                     children: [
-                      Text('Edit ${item.name}', style: GoogleFonts.poppins(fontSize: 20, fontWeight: FontWeight.w700)),
-                      IconButton(onPressed: () => Navigator.pop(context), icon: const Icon(Icons.close), color: Colors.grey.shade600),
+                      Expanded(
+                        child: Text('Edit ${item.name}',
+                            style: GoogleFonts.poppins(
+                                fontSize: 20,
+                                fontWeight: FontWeight.w700),
+                            overflow: TextOverflow.ellipsis),
+                      ),
+                      IconButton(
+                          onPressed: () => Navigator.pop(context),
+                          icon: const Icon(Icons.close),
+                          color: Colors.grey.shade600),
                     ],
                   ),
                   const SizedBox(height: 20),
 
-                  // Image Upload Section (Web Compatible)
-                  Container(
-                    width: double.infinity,
-                    height: 150,
-                    decoration: BoxDecoration(
-                      color: Colors.grey.shade50,
-                      borderRadius: BorderRadius.circular(12),
-                      border: Border.all(color: Colors.grey.shade300),
-                    ),
-                    child: selectedImage != null
-                        ? Stack(
-                            children: [
-                              ClipRRect(
-                                borderRadius: BorderRadius.circular(12),
-                                child: FutureBuilder<Uint8List>(
-                                  future: selectedImage!.readAsBytes(),
-                                  builder: (context, snapshot) {
-                                    if (snapshot.hasData && snapshot.data != null) {
-                                      return Image.memory(
-                                        snapshot.data!,
-                                        width: double.infinity,
-                                        height: 150,
-                                        fit: BoxFit.cover,
-                                      );
-                                    } else if (snapshot.hasError) {
-                                      return Container(
-                                        color: Colors.grey.shade200,
-                                        child: const Icon(Icons.broken_image, size: 50, color: Colors.grey),
-                                      );
-                                    } else {
-                                      return const Center(
-                                        child: CircularProgressIndicator(),
-                                      );
-                                    }
-                                  },
-                                ),
-                              ),
-                              Positioned(
-                                top: 8,
-                                right: 8,
-                                child: CircleAvatar(
-                                  backgroundColor: Colors.black.withValues(alpha: 0.7),
-                                  radius: 18,
-                                  child: IconButton(
-                                    icon: const Icon(Icons.close, color: Colors.white, size: 16),
-                                    onPressed: () {
-                                      setModalState(() => selectedImage = null);
-                                    },
-                                    padding: EdgeInsets.zero,
-                                  ),
-                                ),
-                              ),
-                            ],
-                          )
-                        : existingImageUrl != null
-                            ? Stack(
-                                children: [
-                                  ClipRRect(
-                                    borderRadius: BorderRadius.circular(12),
-                                    child: Image.network(
-                                      existingImageUrl!,
-                                      width: double.infinity,
-                                      height: 150,
-                                      fit: BoxFit.cover,
-                                      errorBuilder: (context, error, stackTrace) {
-                                        return Container(
-                                          color: Colors.grey.shade200,
-                                          child: const Icon(Icons.broken_image, size: 50, color: Colors.grey),
-                                        );
-                                      },
-                                    ),
-                                  ),
-                                  Positioned(
-                                    top: 8,
-                                    right: 8,
-                                    child: CircleAvatar(
-                                      backgroundColor: Colors.black.withValues(alpha: 0.7),
-                                      radius: 18,
-                                      child: IconButton(
-                                        icon: const Icon(Icons.close, color: Colors.white, size: 16),
-                                        onPressed: () {
-                                          setModalState(() => existingImageUrl = null);
-                                        },
-                                        padding: EdgeInsets.zero,
-                                      ),
-                                    ),
-                                  ),
-                                ],
-                              )
-                            : InkWell(
-                                onTap: () async {
-                                  final XFile? image = await ImagePickerHelper.pickImage();
-                                  if (image != null) {
-                                    setModalState(() => selectedImage = image);
-                                  }
-                                },
-                                child: Column(
-                                  mainAxisAlignment: MainAxisAlignment.center,
-                                  children: [
-                                    Icon(
-                                      kIsWeb ? Icons.cloud_upload : Icons.photo_library,
-                                      size: 48,
-                                      color: Colors.grey.shade400,
-                                    ),
-                                    const SizedBox(height: 8),
-                                    Text(
-                                      kIsWeb ? 'Click to select image' : 'Tap to upload image',
-                                      style: GoogleFonts.poppins(
-                                        color: Colors.grey.shade500,
-                                        fontSize: 14,
-                                      ),
-                                    ),
-                                    Text(
-                                      'Recommended: 800x800px',
-                                      style: GoogleFonts.poppins(
-                                        color: Colors.grey.shade400,
-                                        fontSize: 12,
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                              ),
+                  _buildImagePicker(
+                    context: context,
+                    selectedImage: selectedImage,
+                    existingImageUrl: existingImageUrl,
+                    hintLine1: kIsWeb
+                        ? 'Click to select image'
+                        : 'Tap to upload image',
+                    hintLine2: 'Recommended: 800x800px',
+                    onPick: (img) =>
+                        setModalState(() => selectedImage = img),
+                    onClear: () {
+                      setModalState(() => selectedImage = null);
+                    },
+                    onClearExisting: () {
+                      setModalState(() => existingImageUrl = null);
+                    },
                   ),
                   const SizedBox(height: 16),
 
-                  Text('Food Name', style: GoogleFonts.poppins(fontWeight: FontWeight.w600, fontSize: 13)),
+                  Text('Food Name',
+                      style: GoogleFonts.poppins(
+                          fontWeight: FontWeight.w600, fontSize: 13)),
                   const SizedBox(height: 6),
-                  TextField(controller: nameController, decoration: InputDecoration(hintText: 'e.g. Chicken Meal', border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)), contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12))),
+                  TextField(
+                      controller: nameController,
+                      decoration: InputDecoration(
+                          hintText: 'e.g. Chicken Meal',
+                          border: OutlineInputBorder(
+                              borderRadius: BorderRadius.circular(10)),
+                          contentPadding: const EdgeInsets.symmetric(
+                              horizontal: 14, vertical: 12))),
                   const SizedBox(height: 16),
 
-                  Text('Category', style: GoogleFonts.poppins(fontWeight: FontWeight.w600, fontSize: 13)),
+                  Text('Category',
+                      style: GoogleFonts.poppins(
+                          fontWeight: FontWeight.w600, fontSize: 13)),
                   const SizedBox(height: 6),
                   DropdownButtonFormField<String>(
                     initialValue: selectedCategory,
-                    decoration: InputDecoration(border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)), contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12)),
-                    items: ['Meals', 'Snacks', 'Drinks', 'Desserts', 'Pastas'].map((cat) => DropdownMenuItem(value: cat, child: Text(cat))).toList(),
-                    onChanged: (val) { if (val != null) setModalState(() => selectedCategory = val); },
+                    decoration: InputDecoration(
+                        border: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(10)),
+                        contentPadding: const EdgeInsets.symmetric(
+                            horizontal: 14, vertical: 12)),
+                    items: ['Meals', 'Snacks', 'Drinks', 'Desserts', 'Pastas']
+                        .map((cat) => DropdownMenuItem(
+                            value: cat, child: Text(cat)))
+                        .toList(),
+                    onChanged: (val) {
+                      if (val != null) {
+                        setModalState(() => selectedCategory = val);
+                      }
+                    },
                   ),
                   const SizedBox(height: 16),
 
-                  Text('Price (₱)', style: GoogleFonts.poppins(fontWeight: FontWeight.w600, fontSize: 13)),
+                  Text('Price (₱)',
+                      style: GoogleFonts.poppins(
+                          fontWeight: FontWeight.w600, fontSize: 13)),
                   const SizedBox(height: 6),
-                  TextField(controller: priceController, keyboardType: TextInputType.number, decoration: InputDecoration(hintText: 'e.g. 75', prefixText: '₱ ', border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)), contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12))),
+                  TextField(
+                      controller: priceController,
+                      keyboardType: TextInputType.number,
+                      decoration: InputDecoration(
+                          hintText: 'e.g. 75',
+                          prefixText: '₱ ',
+                          border: OutlineInputBorder(
+                              borderRadius: BorderRadius.circular(10)),
+                          contentPadding: const EdgeInsets.symmetric(
+                              horizontal: 14, vertical: 12))),
                   const SizedBox(height: 16),
 
-                  Text('Stock Quantity', style: GoogleFonts.poppins(fontWeight: FontWeight.w600, fontSize: 13)),
+                  Text('Stock Quantity',
+                      style: GoogleFonts.poppins(
+                          fontWeight: FontWeight.w600, fontSize: 13)),
                   const SizedBox(height: 6),
-                  TextField(controller: stockController, keyboardType: TextInputType.number, decoration: InputDecoration(hintText: 'e.g. 20', prefixIcon: const Icon(Icons.inventory_2_outlined, size: 20), border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)), contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12))),
+                  TextField(
+                      controller: stockController,
+                      keyboardType: TextInputType.number,
+                      decoration: InputDecoration(
+                          hintText: 'e.g. 20',
+                          prefixIcon: const Icon(
+                              Icons.inventory_2_outlined,
+                              size: 20),
+                          border: OutlineInputBorder(
+                              borderRadius: BorderRadius.circular(10)),
+                          contentPadding: const EdgeInsets.symmetric(
+                              horizontal: 14, vertical: 12))),
                   const SizedBox(height: 16),
 
-                  Text('Description', style: GoogleFonts.poppins(fontWeight: FontWeight.w600, fontSize: 13)),
+                  Text('Description',
+                      style: GoogleFonts.poppins(
+                          fontWeight: FontWeight.w600, fontSize: 13)),
                   const SizedBox(height: 6),
-                  TextField(controller: descController, maxLines: 3, decoration: InputDecoration(hintText: 'Enter food details...', border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)), contentPadding: const EdgeInsets.all(12))),
+                  TextField(
+                      controller: descController,
+                      maxLines: 3,
+                      decoration: InputDecoration(
+                          hintText: 'Enter food details...',
+                          border: OutlineInputBorder(
+                              borderRadius: BorderRadius.circular(10)),
+                          contentPadding: const EdgeInsets.all(12))),
+                  const SizedBox(height: 16),
+
+                  // ── RECIPE SECTION ──
+                  _buildRecipeSection(
+                    ctx: context,
+                    rows: recipeRows,
+                    setModalState: setModalState,
+                  ),
                   const SizedBox(height: 16),
 
                   SwitchListTile(
                     contentPadding: EdgeInsets.zero,
-                    title: Text('Available for ordering today', style: GoogleFonts.poppins(fontWeight: FontWeight.w500)),
+                    title: Text(
+                        'Available for ordering today',
+                        style: GoogleFonts.poppins(
+                            fontWeight: FontWeight.w500)),
                     value: isAvailable,
                     activeThumbColor: green,
-                    onChanged: (val) => setModalState(() => isAvailable = val),
+                    onChanged: (val) =>
+                        setModalState(() => isAvailable = val),
                   ),
                   const SizedBox(height: 24),
 
@@ -1455,38 +1832,73 @@ class _AdminMenuManagementPageState extends State<AdminMenuManagementPage> {
                           onPressed: isUploading
                               ? null
                               : () async {
-                                  final updatedItem = item.copyWith(
-                                    name: nameController.text,
-                                    category: selectedCategory,
-                                    price: double.tryParse(priceController.text) ?? item.price,
-                                    description: descController.text,
-                                    stock: int.tryParse(stockController.text) ?? item.stock,
-                                    isAvailable: isAvailable,
-                                  );
-                                  
-                                  setModalState(() => isUploading = true);
+                                  setModalState(
+                                      () => isUploading = true);
                                   try {
-                                    await _updateItem(item.id, updatedItem, selectedImage);
+                                    final recipe = recipeRows
+                                        .map((r) => RecipeIngredient(
+                                              ingredientId: r[
+                                                      'ingredientId'] ??
+                                                  '',
+                                              ingredientName:
+                                                  r['ingredientName'],
+                                              unit: r['unit'],
+                                              qtyPerPortion:
+                                                  (r['qtyPerPortion']
+                                                          as num)
+                                                      .toDouble(),
+                                            ))
+                                        .toList();
+
+                                    final updatedItem =
+                                        item.copyWith(
+                                      name: nameController.text,
+                                      category: selectedCategory,
+                                      price: double.tryParse(
+                                              priceController.text) ??
+                                          item.price,
+                                      description:
+                                          descController.text,
+                                      stock: int.tryParse(
+                                              stockController.text) ??
+                                          item.stock,
+                                      isAvailable: isAvailable,
+                                      imageUrl: existingImageUrl,
+                                      recipe: recipe,
+                                    );
+
+                                    await _updateItem(item.id,
+                                        updatedItem, selectedImage);
                                     if (context.mounted) {
                                       Navigator.pop(context);
-                                      ScaffoldMessenger.of(context).showSnackBar(
-                                        SnackBar(content: Text('Updated "${updatedItem.name}" successfully!'), backgroundColor: green),
-                                      );
+                                      ScaffoldMessenger.of(context)
+                                          .showSnackBar(SnackBar(
+                                        content: Text(
+                                            'Updated "${updatedItem.name}" successfully!'),
+                                        backgroundColor: green,
+                                      ));
                                     }
                                   } catch (e) {
-                                    setModalState(() => isUploading = false);
+                                    setModalState(
+                                        () => isUploading = false);
                                     if (context.mounted) {
-                                      ScaffoldMessenger.of(context).showSnackBar(
-                                        SnackBar(content: Text('Error updating item: $e'), backgroundColor: Colors.red),
-                                      );
+                                      ScaffoldMessenger.of(context)
+                                          .showSnackBar(SnackBar(
+                                        content: Text(
+                                            'Error updating item: $e'),
+                                        backgroundColor: Colors.red,
+                                      ));
                                     }
                                   }
                                 },
                           style: ElevatedButton.styleFrom(
                             backgroundColor: green,
                             foregroundColor: Colors.white,
-                            padding: const EdgeInsets.symmetric(vertical: 14),
-                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                            padding: const EdgeInsets.symmetric(
+                                vertical: 14),
+                            shape: RoundedRectangleBorder(
+                                borderRadius:
+                                    BorderRadius.circular(10)),
                           ),
                           child: isUploading
                               ? const SizedBox(
@@ -1503,10 +1915,15 @@ class _AdminMenuManagementPageState extends State<AdminMenuManagementPage> {
                       const SizedBox(width: 12),
                       Expanded(
                         child: OutlinedButton(
-                          onPressed: isUploading ? null : () => Navigator.pop(context),
+                          onPressed: isUploading
+                              ? null
+                              : () => Navigator.pop(context),
                           style: OutlinedButton.styleFrom(
-                            padding: const EdgeInsets.symmetric(vertical: 14),
-                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                            padding: const EdgeInsets.symmetric(
+                                vertical: 14),
+                            shape: RoundedRectangleBorder(
+                                borderRadius:
+                                    BorderRadius.circular(10)),
                           ),
                           child: const Text('Cancel'),
                         ),
@@ -1521,11 +1938,151 @@ class _AdminMenuManagementPageState extends State<AdminMenuManagementPage> {
       ),
     );
   }
+
+  // ─────────────────────────────────────────────
+  // SHARED IMAGE PICKER WIDGET (used by Add + Edit)
+  // ─────────────────────────────────────────────
+  Widget _buildImagePicker({
+    required BuildContext context,
+    required XFile? selectedImage,
+    required String? existingImageUrl,
+    required String hintLine1,
+    required String hintLine2,
+    required void Function(XFile) onPick,
+    required VoidCallback onClear,
+    VoidCallback? onClearExisting,
+  }) {
+    return Container(
+      width: double.infinity,
+      height: 150,
+      decoration: BoxDecoration(
+        color: Colors.grey.shade50,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: Colors.grey.shade300),
+      ),
+      child: selectedImage != null
+          ? Stack(
+              children: [
+                ClipRRect(
+                  borderRadius: BorderRadius.circular(12),
+                  child: FutureBuilder<Uint8List>(
+                    future: selectedImage.readAsBytes(),
+                    builder: (context, snapshot) {
+                      if (snapshot.hasData &&
+                          snapshot.data != null) {
+                        return Image.memory(
+                          snapshot.data!,
+                          width: double.infinity,
+                          height: 150,
+                          fit: BoxFit.cover,
+                        );
+                      } else if (snapshot.hasError) {
+                        return Container(
+                          color: Colors.grey.shade200,
+                          child: const Icon(Icons.broken_image,
+                              size: 50, color: Colors.grey),
+                        );
+                      } else {
+                        return const Center(
+                            child: CircularProgressIndicator());
+                      }
+                    },
+                  ),
+                ),
+                Positioned(
+                  top: 8,
+                  right: 8,
+                  child: CircleAvatar(
+                    backgroundColor:
+                        Colors.black.withValues(alpha: 0.7),
+                    radius: 18,
+                    child: IconButton(
+                      icon: const Icon(Icons.close,
+                          color: Colors.white, size: 16),
+                      onPressed: onClear,
+                      padding: EdgeInsets.zero,
+                    ),
+                  ),
+                ),
+              ],
+            )
+          : existingImageUrl != null
+              ? Stack(
+                  children: [
+                    ClipRRect(
+                      borderRadius: BorderRadius.circular(12),
+                      child: Image.network(
+                        existingImageUrl,
+                        width: double.infinity,
+                        height: 150,
+                        fit: BoxFit.cover,
+                        errorBuilder: (context, error, stackTrace) {
+                          return Container(
+                            color: Colors.grey.shade200,
+                            child: const Icon(Icons.broken_image,
+                                size: 50, color: Colors.grey),
+                          );
+                        },
+                      ),
+                    ),
+                    Positioned(
+                      top: 8,
+                      right: 8,
+                      child: CircleAvatar(
+                        backgroundColor:
+                            Colors.black.withValues(alpha: 0.7),
+                        radius: 18,
+                        child: IconButton(
+                          icon: const Icon(Icons.close,
+                              color: Colors.white, size: 16),
+                          onPressed:
+                              onClearExisting ?? () {},
+                          padding: EdgeInsets.zero,
+                        ),
+                      ),
+                    ),
+                  ],
+                )
+              : InkWell(
+                  onTap: () async {
+                    final XFile? image =
+                        await ImagePickerHelper.pickImage();
+                    if (image != null) onPick(image);
+                  },
+                  child: Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      Icon(
+                        kIsWeb
+                            ? Icons.cloud_upload
+                            : Icons.photo_library,
+                        size: 48,
+                        color: Colors.grey.shade400,
+                      ),
+                      const SizedBox(height: 8),
+                      Text(
+                        hintLine1,
+                        style: GoogleFonts.poppins(
+                          color: Colors.grey.shade500,
+                          fontSize: 14,
+                        ),
+                      ),
+                      Text(
+                        hintLine2,
+                        style: GoogleFonts.poppins(
+                          color: Colors.grey.shade400,
+                          fontSize: 12,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+    );
+  }
 }
 
-// ==========================================
+
 // 4. ADMIN INVENTORY PAGE
-// ==========================================
 class AdminInventoryPage extends StatefulWidget {
   const AdminInventoryPage({super.key});
 
@@ -1535,66 +2092,221 @@ class AdminInventoryPage extends StatefulWidget {
 
 class _AdminInventoryPageState extends State<AdminInventoryPage> {
   final Color adminPurple = const Color(0xFF5E35B1);
+  final Color green = const Color(0xFF2E7D32);
+  final CollectionReference _inv =
+      FirebaseFirestore.instance.collection('inventory');
 
-  final List<Map<String, dynamic>> _inventory = [
-    {'name': 'Beef Patty', 'stock': 35, 'min': 10},
-    {'name': 'Chicken Fillet', 'stock': 8, 'min': 10},
-    {'name': 'Rice (kg)', 'stock': 50, 'min': 20},
-    {'name': 'French Fries (packs)', 'stock': 6, 'min': 10},
-    {'name': 'Milk Tea Pearls (packs)', 'stock': 15, 'min': 10},
-    {'name': 'Soft Drink Cans', 'stock': 25, 'min': 10},
-  ];
+  /// 'all' | 'ingredient' | 'supply'
+  String _typeFilter = 'all';
 
-  void _adjustStock(int index, int delta) {
-    setState(() {
-      final newStock = (_inventory[index]['stock'] as int) + delta;
-      if (newStock >= 0) {
-        _inventory[index]['stock'] = newStock;
-      }
-    });
-  }
-
-  void _addNewItemDialog() {
+  // ─────────────────────────────────────────────
+  // ADD ITEM DIALOG (ingredient OR supply)
+  // ─────────────────────────────────────────────
+  void _showAddIngredientDialog({InventoryType initialType = InventoryType.ingredient}) {
     final nameCtrl = TextEditingController();
-    final stockCtrl = TextEditingController();
-    final minCtrl = TextEditingController(text: '10');
+    final stockCtrl = TextEditingController(text: '0');
+    final minCtrl = TextEditingController(text: '5');
+    String unit = 'pcs';
+    InventoryType type = initialType;
 
     showDialog(
       context: context,
-      builder: (context) => AlertDialog(
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-        title: Text('Add Inventory Item', style: GoogleFonts.poppins(fontWeight: FontWeight.bold)),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            TextField(controller: nameCtrl, decoration: const InputDecoration(labelText: 'Item Name')),
-            TextField(controller: stockCtrl, keyboardType: TextInputType.number, decoration: const InputDecoration(labelText: 'Initial Stock')),
-            TextField(controller: minCtrl, keyboardType: TextInputType.number, decoration: const InputDecoration(labelText: 'Min Alert Level')),
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setD) => AlertDialog(
+          shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(16)),
+          title: Text(
+            type == InventoryType.ingredient
+                ? 'Add Ingredient'
+                : 'Add Supply',
+            style: GoogleFonts.poppins(fontWeight: FontWeight.bold),
+          ),
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                // Type toggle at the top
+                SegmentedButton<InventoryType>(
+                  segments: const [
+                    ButtonSegment(
+                      value: InventoryType.ingredient,
+                      label: Text('Ingredient'),
+                      icon: Icon(Icons.restaurant, size: 16),
+                    ),
+                    ButtonSegment(
+                      value: InventoryType.supply,
+                      label: Text('Supply'),
+                      icon: Icon(Icons.inventory_2, size: 16),
+                    ),
+                  ],
+                  selected: {type},
+                  onSelectionChanged: (s) =>
+                      setD(() => type = s.first),
+                ),
+                const SizedBox(height: 12),
+                TextField(
+                  controller: nameCtrl,
+                  decoration: InputDecoration(
+                    labelText: type == InventoryType.ingredient
+                        ? 'Ingredient name'
+                        : 'Supply name (e.g. Plastic Cup)',
+                  ),
+                ),
+                const SizedBox(height: 8),
+                UnitPickerField(
+                  value: unit,
+                  onChanged: (v) => setD(() => unit = v),
+                ),
+                const SizedBox(height: 8),
+                TextField(
+                  controller: stockCtrl,
+                  keyboardType: TextInputType.number,
+                  decoration:
+                      const InputDecoration(labelText: 'Initial stock'),
+                ),
+                const SizedBox(height: 8),
+                TextField(
+                  controller: minCtrl,
+                  keyboardType: TextInputType.number,
+                  decoration: const InputDecoration(
+                      labelText: 'Min alert level'),
+                ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: const Text('Cancel'),
+            ),
+            ElevatedButton(
+              onPressed: () async {
+                if (nameCtrl.text.trim().isEmpty) return;
+                await _inv.add(InventoryItemModel(
+                  id: '',
+                  name: nameCtrl.text.trim(),
+                  unit: unit,
+                  stock: double.tryParse(stockCtrl.text) ?? 0,
+                  minLevel: double.tryParse(minCtrl.text) ?? 0,
+                  type: type,
+                  updatedAt: DateTime.now(),
+                ).toMap());
+                if (ctx.mounted) Navigator.pop(ctx);
+              },
+              style: ElevatedButton.styleFrom(
+                backgroundColor: adminPurple,
+                foregroundColor: Colors.white,
+              ),
+              child: const Text('Add'),
+            ),
           ],
         ),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
-          ElevatedButton(
-            onPressed: () {
-              if (nameCtrl.text.isNotEmpty && stockCtrl.text.isNotEmpty) {
-                setState(() {
-                  _inventory.add({
-                    'name': nameCtrl.text,
-                    'stock': int.tryParse(stockCtrl.text) ?? 0,
-                    'min': int.tryParse(minCtrl.text) ?? 10,
-                  });
-                });
-                Navigator.pop(context);
-              }
-            },
-            style: ElevatedButton.styleFrom(backgroundColor: adminPurple, foregroundColor: Colors.white),
-            child: const Text('Add'),
-          ),
-        ],
       ),
     );
   }
 
+  // ─────────────────────────────────────────────
+  // EDIT ITEM DIALOG
+  // ─────────────────────────────────────────────
+  void _showEditIngredientDialog(InventoryItemModel item) {
+    final nameCtrl = TextEditingController(text: item.name);
+    final stockCtrl =
+        TextEditingController(text: item.stock.toString());
+    final minCtrl =
+        TextEditingController(text: item.minLevel.toString());
+    String unit = item.unit;
+    InventoryType type = item.type;
+
+    showDialog(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setD) => AlertDialog(
+          shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(16)),
+          title: Text('Edit ${item.name}',
+              style: GoogleFonts.poppins(fontWeight: FontWeight.bold)),
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                SegmentedButton<InventoryType>(
+                  segments: const [
+                    ButtonSegment(
+                      value: InventoryType.ingredient,
+                      label: Text('Ingredient'),
+                      icon: Icon(Icons.restaurant, size: 16),
+                    ),
+                    ButtonSegment(
+                      value: InventoryType.supply,
+                      label: Text('Supply'),
+                      icon: Icon(Icons.inventory_2, size: 16),
+                    ),
+                  ],
+                  selected: {type},
+                  onSelectionChanged: (s) =>
+                      setD(() => type = s.first),
+                ),
+                const SizedBox(height: 12),
+                TextField(
+                  controller: nameCtrl,
+                  decoration:
+                      const InputDecoration(labelText: 'Name'),
+                ),
+                const SizedBox(height: 8),
+                UnitPickerField(
+                  value: unit,
+                  onChanged: (v) => setD(() => unit = v),
+                ),
+                const SizedBox(height: 8),
+                TextField(
+                  controller: stockCtrl,
+                  keyboardType: TextInputType.number,
+                  decoration:
+                      const InputDecoration(labelText: 'Stock'),
+                ),
+                const SizedBox(height: 8),
+                TextField(
+                  controller: minCtrl,
+                  keyboardType: TextInputType.number,
+                  decoration:
+                      const InputDecoration(labelText: 'Min level'),
+                ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: const Text('Cancel'),
+            ),
+            ElevatedButton(
+              onPressed: () async {
+                await _inv.doc(item.id).update({
+                  'name': nameCtrl.text.trim(),
+                  'unit': unit,
+                  'stock': double.tryParse(stockCtrl.text) ?? item.stock,
+                  'minLevel':
+                      double.tryParse(minCtrl.text) ?? item.minLevel,
+                  'type': type.name,
+                  'updatedAt': FieldValue.serverTimestamp(),
+                });
+                if (ctx.mounted) Navigator.pop(ctx);
+              },
+              style: ElevatedButton.styleFrom(
+                backgroundColor: adminPurple,
+                foregroundColor: Colors.white,
+              ),
+              child: const Text('Save'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  // ─────────────────────────────────────────────
+  // BUILD
+  // ─────────────────────────────────────────────
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -1604,23 +2316,56 @@ class _AdminInventoryPageState extends State<AdminInventoryPage> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
+            // Header
             Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
-                Text('Inventory Stocks', style: GoogleFonts.poppins(fontSize: 24, fontWeight: FontWeight.w700)),
+                Text('Inventory Stocks',
+                    style: GoogleFonts.poppins(
+                        fontSize: 24, fontWeight: FontWeight.w700)),
                 ElevatedButton.icon(
-                  onPressed: _addNewItemDialog,
+                  onPressed: () => _showAddIngredientDialog(
+                    initialType: _typeFilter == 'supply'
+                        ? InventoryType.supply
+                        : InventoryType.ingredient,
+                  ),
                   icon: const Icon(Icons.add, size: 18),
-                  label: const Text('Add Item'),
+                  label: Text(_typeFilter == 'supply'
+                      ? 'Add Supply'
+                      : 'Add Item'),
                   style: ElevatedButton.styleFrom(
                     backgroundColor: adminPurple,
                     foregroundColor: Colors.white,
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                    shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(10)),
                   ),
                 ),
               ],
             ),
+            const SizedBox(height: 12),
+
+            // ── TYPE FILTER ──
+            SegmentedButton<String>(
+              segments: const [
+                ButtonSegment(
+                    value: 'all',
+                    label: Text('All'),
+                    icon: Icon(Icons.list, size: 16)),
+                ButtonSegment(
+                    value: 'ingredient',
+                    label: Text('Ingredients'),
+                    icon: Icon(Icons.restaurant, size: 16)),
+                ButtonSegment(
+                    value: 'supply',
+                    label: Text('Supplies'),
+                    icon: Icon(Icons.inventory_2, size: 16)),
+              ],
+              selected: {_typeFilter},
+              onSelectionChanged: (s) =>
+                  setState(() => _typeFilter = s.first),
+            ),
             const SizedBox(height: 16),
+
             Expanded(
               child: Container(
                 padding: const EdgeInsets.all(16),
@@ -1629,55 +2374,206 @@ class _AdminInventoryPageState extends State<AdminInventoryPage> {
                   borderRadius: BorderRadius.circular(18),
                   border: Border.all(color: Colors.grey.shade200),
                 ),
-                child: ListView.separated(
-                  itemCount: _inventory.length,
-                  separatorBuilder: (context, i) => Divider(color: Colors.grey.shade100),
-                  itemBuilder: (context, index) {
-                    final item = _inventory[index];
-                    final int stock = item['stock'] as int;
-                    final int min = item['min'] as int;
-                    final bool isLow = stock <= min;
+                child: StreamBuilder<QuerySnapshot>(
+                  stream: _inv.orderBy('name').snapshots(),
+                  builder: (context, snapshot) {
+                    if (snapshot.connectionState ==
+                        ConnectionState.waiting) {
+                      return const Center(
+                          child: CircularProgressIndicator());
+                    }
+                    if (snapshot.hasError) {
+                      return Center(
+                          child:
+                              Text('Error: ${snapshot.error}'));
+                    }
 
-                    return ListTile(
-                      title: Text(item['name'] as String, style: GoogleFonts.poppins(fontWeight: FontWeight.w600)),
-                      subtitle: Text('Min alert level: $min units', style: GoogleFonts.poppins(fontSize: 12, color: Colors.grey.shade600)),
-                      trailing: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          IconButton(
-                            icon: const Icon(Icons.remove_circle_outline, size: 20),
-                            onPressed: () => _adjustStock(index, -1),
-                          ),
-                          Text(
-                            '$stock',
-                            style: GoogleFonts.poppins(
-                              fontSize: 15,
-                              fontWeight: FontWeight.w700,
-                              color: isLow ? Colors.red.shade700 : Colors.black87,
+                    // Parse + filter
+                    var items = (snapshot.data?.docs ?? [])
+                        .map((d) => InventoryItemModel.fromMap(
+                            d.id, d.data() as Map<String, dynamic>))
+                        .toList();
+
+                    if (_typeFilter == 'ingredient') {
+                      items = items
+                          .where((i) => i.isIngredient)
+                          .toList();
+                    } else if (_typeFilter == 'supply') {
+                      items =
+                          items.where((i) => i.isSupply).toList();
+                    }
+
+                    if (items.isEmpty) {
+                      return Center(
+                        child: Column(
+                          mainAxisAlignment:
+                              MainAxisAlignment.center,
+                          children: [
+                            Icon(
+                              _typeFilter == 'supply'
+                                  ? Icons.inventory_2_outlined
+                                  : Icons.restaurant_menu,
+                              size: 64,
+                              color: Colors.grey.shade400,
                             ),
-                          ),
-                          IconButton(
-                            icon: const Icon(Icons.add_circle_outline, size: 20),
-                            onPressed: () => _adjustStock(index, 1),
-                          ),
-                          const SizedBox(width: 8),
-                          Container(
-                            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                            decoration: BoxDecoration(
-                              color: isLow ? Colors.red.shade50 : Colors.green.shade50,
-                              borderRadius: BorderRadius.circular(8),
-                            ),
-                            child: Text(
-                              isLow ? 'LOW' : 'OK',
+                            const SizedBox(height: 12),
+                            Text(
+                              _typeFilter == 'all'
+                                  ? 'No items yet'
+                                  : _typeFilter == 'supply'
+                                      ? 'No supplies yet'
+                                      : 'No ingredients yet',
                               style: GoogleFonts.poppins(
-                                fontSize: 11,
-                                fontWeight: FontWeight.bold,
-                                color: isLow ? Colors.red.shade700 : Colors.green.shade700,
-                              ),
+                                  color: Colors.grey.shade600),
+                            ),
+                          ],
+                        ),
+                      );
+                    }
+
+                    return ListView.separated(
+                      itemCount: items.length,
+                      separatorBuilder: (_, __) =>
+                          Divider(color: Colors.grey.shade100),
+                      itemBuilder: (context, index) {
+                        final item = items[index];
+                        final isLow = item.isLow;
+                        final isOut = item.isOut;
+                        final isIngredient = item.isIngredient;
+
+                        return ListTile(
+                          onTap: () =>
+                              _showEditIngredientDialog(item),
+                          leading: Container(
+                            padding: const EdgeInsets.all(8),
+                            decoration: BoxDecoration(
+                              color: isIngredient
+                                  ? const Color(0xFF5E35B1)
+                                      .withValues(alpha: 0.1)
+                                  : Colors.blue.shade50,
+                              borderRadius:
+                                  BorderRadius.circular(10),
+                            ),
+                            child: Icon(
+                              isIngredient
+                                  ? Icons.restaurant
+                                  : Icons.inventory_2,
+                              color: isIngredient
+                                  ? adminPurple
+                                  : Colors.blue.shade700,
+                              size: 20,
                             ),
                           ),
-                        ],
-                      ),
+                          title: Row(
+                            children: [
+                              Flexible(
+                                child: Text(item.name,
+                                    style: GoogleFonts.poppins(
+                                        fontWeight:
+                                            FontWeight.w600),
+                                    overflow:
+                                        TextOverflow.ellipsis),
+                              ),
+                              const SizedBox(width: 8),
+                              // Type badge
+                              Container(
+                                padding:
+                                    const EdgeInsets.symmetric(
+                                        horizontal: 6, vertical: 2),
+                                decoration: BoxDecoration(
+                                  color: isIngredient
+                                      ? adminPurple
+                                          .withValues(alpha: 0.1)
+                                      : Colors.blue.shade50,
+                                  borderRadius:
+                                      BorderRadius.circular(4),
+                                ),
+                                child: Text(
+                                  isIngredient ? 'ING' : 'SUP',
+                                  style: GoogleFonts.poppins(
+                                    fontSize: 9,
+                                    fontWeight: FontWeight.bold,
+                                    color: isIngredient
+                                        ? adminPurple
+                                        : Colors.blue.shade700,
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                          subtitle: Text(
+                            'Min: ${item.minLevel} ${item.unit}',
+                            style: GoogleFonts.poppins(
+                                fontSize: 12,
+                                color: Colors.grey.shade600),
+                          ),
+                          trailing: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              IconButton(
+                                icon: const Icon(
+                                    Icons.remove_circle_outline,
+                                    size: 20),
+                                onPressed: item.stock <= 0
+                                    ? null
+                                    : () =>
+                                        InventoryService.adjustStock(
+                                            item.id, -1),
+                              ),
+                              Text(
+                                '${item.stock} ${item.unit}',
+                                style: GoogleFonts.poppins(
+                                  fontSize: 14,
+                                  fontWeight: FontWeight.w700,
+                                  color: isOut
+                                      ? Colors.red.shade700
+                                      : isLow
+                                          ? Colors.orange.shade800
+                                          : Colors.black87,
+                                ),
+                              ),
+                              IconButton(
+                                icon: const Icon(
+                                    Icons.add_circle_outline,
+                                    size: 20),
+                                onPressed: () =>
+                                    InventoryService.adjustStock(
+                                        item.id, 1),
+                              ),
+                              const SizedBox(width: 8),
+                              Container(
+                                padding: const EdgeInsets.symmetric(
+                                    horizontal: 10, vertical: 4),
+                                decoration: BoxDecoration(
+                                  color: isOut
+                                      ? Colors.red.shade50
+                                      : isLow
+                                          ? Colors.orange.shade50
+                                          : Colors.green.shade50,
+                                  borderRadius:
+                                      BorderRadius.circular(8),
+                                ),
+                                child: Text(
+                                  isOut
+                                      ? 'OUT'
+                                      : isLow
+                                          ? 'LOW'
+                                          : 'OK',
+                                  style: GoogleFonts.poppins(
+                                    fontSize: 11,
+                                    fontWeight: FontWeight.bold,
+                                    color: isOut
+                                        ? Colors.red.shade700
+                                        : isLow
+                                            ? Colors.orange.shade800
+                                            : Colors.green.shade700,
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                        );
+                      },
                     );
                   },
                 ),
@@ -1690,9 +2586,8 @@ class _AdminInventoryPageState extends State<AdminInventoryPage> {
   }
 }
 
-// ==========================================
+
 // 5. ADMIN LOYALTY REWARDS PAGE
-// ==========================================
 class AdminLoyaltyRewardsPage extends StatefulWidget {
   const AdminLoyaltyRewardsPage({super.key});
 
@@ -1762,9 +2657,7 @@ class _AdminLoyaltyRewardsPageState extends State<AdminLoyaltyRewardsPage> {
   }
 }
 
-// ==========================================
 // Line Chart Painter
-// ==========================================
 class LineChartPainter extends CustomPainter {
   @override
   void paint(Canvas canvas, Size size) {

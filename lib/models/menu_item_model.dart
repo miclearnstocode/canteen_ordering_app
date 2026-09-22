@@ -1,11 +1,36 @@
+// lib/models/menu_item_model.dart
+import 'package:cloud_firestore/cloud_firestore.dart';
 
-enum MenuCategory {
-  meals,
-  drinks,
-  pastas,
-  snacks,
-  desserts,
-  others,
+/// One line of a menu item's recipe:
+/// "this dish uses X of ingredient Y per portion".
+class RecipeIngredient {
+  final String ingredientId;
+  final String ingredientName; // denormalized for display
+  final String unit;
+  final double qtyPerPortion;
+
+  RecipeIngredient({
+    required this.ingredientId,
+    required this.ingredientName,
+    required this.unit,
+    required this.qtyPerPortion,
+  });
+
+  factory RecipeIngredient.fromMap(Map<String, dynamic> m) {
+    return RecipeIngredient(
+      ingredientId: m['ingredientId'] ?? '',
+      ingredientName: m['ingredientName'] ?? '',
+      unit: m['unit'] ?? '',
+      qtyPerPortion: (m['qtyPerPortion'] as num?)?.toDouble() ?? 0,
+    );
+  }
+
+  Map<String, dynamic> toMap() => {
+        'ingredientId': ingredientId,
+        'ingredientName': ingredientName,
+        'unit': unit,
+        'qtyPerPortion': qtyPerPortion,
+      };
 }
 
 class MenuItemModel {
@@ -17,6 +42,7 @@ class MenuItemModel {
   int stock;
   bool isAvailable;
   String? imageUrl;
+  List<RecipeIngredient> recipe;
 
   MenuItemModel({
     required this.id,
@@ -27,9 +53,9 @@ class MenuItemModel {
     required this.stock,
     this.isAvailable = true,
     this.imageUrl,
-  });
+    List<RecipeIngredient>? recipe,
+  }) : recipe = recipe ?? [];
 
-  // Copy with method for updating
   MenuItemModel copyWith({
     String? name,
     String? category,
@@ -38,6 +64,7 @@ class MenuItemModel {
     int? stock,
     bool? isAvailable,
     String? imageUrl,
+    List<RecipeIngredient>? recipe,
   }) {
     return MenuItemModel(
       id: id,
@@ -48,11 +75,12 @@ class MenuItemModel {
       stock: stock ?? this.stock,
       isAvailable: isAvailable ?? this.isAvailable,
       imageUrl: imageUrl ?? this.imageUrl,
+      recipe: recipe ?? this.recipe,
     );
   }
 
-  // Convert from Firestore
   factory MenuItemModel.fromMap(String id, Map<String, dynamic> map) {
+    final rawRecipe = (map['recipe'] as List?) ?? const [];
     return MenuItemModel(
       id: id,
       name: map['name'] ?? '',
@@ -62,10 +90,13 @@ class MenuItemModel {
       stock: map['stock'] ?? 0,
       isAvailable: map['isAvailable'] ?? true,
       imageUrl: (map['image_url'] ?? map['imageUrl']) as String?,
+      recipe: rawRecipe
+          .whereType<Map>()
+          .map((e) => RecipeIngredient.fromMap(Map<String, dynamic>.from(e)))
+          .toList(),
     );
   }
 
-  // Convert to Map for Firestore
   Map<String, dynamic> toMap() {
     return {
       'name': name,
@@ -76,6 +107,7 @@ class MenuItemModel {
       'isAvailable': isAvailable,
       'image_url': imageUrl,
       'imageUrl': imageUrl,
+      'recipe': recipe.map((r) => r.toMap()).toList(),
     };
   }
 }
