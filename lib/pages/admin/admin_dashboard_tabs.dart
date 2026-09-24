@@ -1348,9 +1348,16 @@ class AdminMenuManagementPage extends StatefulWidget {
 class _AdminMenuManagementPageState extends State<AdminMenuManagementPage> {
   final Color adminPurple = const Color(0xFF5E35B1);
   final Color green = const Color(0xFF2E7D32);
+  final Color amber = const Color(0xFFF9A825);
   final CollectionReference _menuCollection =
       FirebaseFirestore.instance.collection('menu_items');
 
+  /// 'all' | 'specials'
+  String _menuFilter = 'all';
+
+  // ─────────────────────────────────────────────
+  // ADD ITEM
+  // ─────────────────────────────────────────────
   Future<void> _addItem(MenuItemModel item, XFile? imageFile) async {
     String? imageUrl;
 
@@ -1378,12 +1385,16 @@ class _AdminMenuManagementPageState extends State<AdminMenuManagementPage> {
     );
   }
 
+  // ─────────────────────────────────────────────
+  // UPDATE ITEM
+  // Fetches the true OLD recipe from Firestore to use as the
+  // baseline, then applies the delta.
+  // ─────────────────────────────────────────────
   Future<void> _updateItem(
     String id,
     MenuItemModel updatedItem,
     XFile? imageFile,
   ) async {
-    // ── 1. Fetch the true OLD recipe from Firestore.
     final existingSnap = await _menuCollection.doc(id).get();
     if (!existingSnap.exists) {
       throw Exception('Menu item no longer exists.');
@@ -1394,7 +1405,6 @@ class _AdminMenuManagementPageState extends State<AdminMenuManagementPage> {
     );
     final oldRecipe = existingItem.recipe;
 
-    // ── 2. Upload new image if provided.
     String? imageUrl = updatedItem.imageUrl;
     if (imageFile != null) {
       imageUrl = await CloudinaryService.uploadImage(
@@ -1403,7 +1413,6 @@ class _AdminMenuManagementPageState extends State<AdminMenuManagementPage> {
       );
     }
 
-    // ── 3. Ensure every ingredient has a valid inventory doc.
     final resolvedRecipe =
         await InventoryService.ensureIngredientsExist(updatedItem.recipe);
 
@@ -1412,10 +1421,8 @@ class _AdminMenuManagementPageState extends State<AdminMenuManagementPage> {
       recipe: resolvedRecipe,
     );
 
-    // ── 4. Save the menu item.
     await _menuCollection.doc(id).update(itemWithImage.toMap());
 
-    // ── 5. Apply the stock delta.
     debugPrint('=== MENU EDIT: RECIPE DELTA ===');
     debugPrint(
         'old: ${oldRecipe.map((r) => "${r.ingredientName}=${r.qtyPerPortion}${r.unit}").toList()}');
@@ -1428,10 +1435,33 @@ class _AdminMenuManagementPageState extends State<AdminMenuManagementPage> {
     );
   }
 
+  // ─────────────────────────────────────────────
+  // DELETE ITEM
+  // ─────────────────────────────────────────────
   Future<void> _deleteItem(String id, String? imageUrl) async {
     await _menuCollection.doc(id).delete();
   }
 
+  // ─────────────────────────────────────────────
+  // TOGGLE SPECIAL (quick switch from the list)
+  // ─────────────────────────────────────────────
+  Future<void> _toggleSpecial(MenuItemModel item) async {
+    await _menuCollection.doc(item.id).update({
+      'isSpecial': !item.isSpecial,
+    });
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text(item.isSpecial
+            ? '"${item.name}" removed from specials'
+            : '"${item.name}" marked as special'),
+        backgroundColor: item.isSpecial ? Colors.grey.shade700 : amber,
+      ));
+    }
+  }
+
+  // ─────────────────────────────────────────────
+  // BUILD
+  // ─────────────────────────────────────────────
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -1464,6 +1494,26 @@ class _AdminMenuManagementPageState extends State<AdminMenuManagementPage> {
             Text('Tap to edit • Swipe left to delete',
                 style: GoogleFonts.poppins(
                     fontSize: 13, color: Colors.grey.shade600)),
+            const SizedBox(height: 12),
+
+            // ── FILTER CHIPS ──
+            SegmentedButton<String>(
+              segments: const [
+                ButtonSegment(
+                  value: 'all',
+                  label: Text('All Items'),
+                  icon: Icon(Icons.list, size: 16),
+                ),
+                ButtonSegment(
+                  value: 'specials',
+                  label: Text("Today's Specials"),
+                  icon: Icon(Icons.star_rounded, size: 16),
+                ),
+              ],
+              selected: {_menuFilter},
+              onSelectionChanged: (s) =>
+                  setState(() => _menuFilter = s.first),
+            ),
             const SizedBox(height: 16),
 
             Expanded(
@@ -1491,7 +1541,37 @@ class _AdminMenuManagementPageState extends State<AdminMenuManagementPage> {
                       return _buildEmptyState();
                     }
 
-                    final docs = snapshot.data!.docs;
+                    // Apply filter
+                    final allDocs = snapshot.data!.docs;
+                    final docs = _menuFilter == 'specials'
+                        ? allDocs.where((d) {
+                            final data =
+                                d.data() as Map<String, dynamic>;
+                            return data['isSpecial'] == true;
+                          }).toList()
+                        : allDocs;
+
+                    if (docs.isEmpty) {
+                      return Center(
+                        child: Column(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            Icon(Icons.star_border_rounded,
+                                size: 64,
+                                color: Colors.grey.shade400),
+                            const SizedBox(height: 12),
+                            Text(
+                              _menuFilter == 'specials'
+                                  ? "No specials yet. Mark an item as special to feature it."
+                                  : 'No items yet.',
+                              textAlign: TextAlign.center,
+                              style: GoogleFonts.poppins(
+                                  color: Colors.grey.shade600),
+                            ),
+                          ],
+                        ),
+                      );
+                    }
 
                     return ListView.separated(
                       itemCount: docs.length,
@@ -1602,12 +1682,57 @@ class _AdminMenuManagementPageState extends State<AdminMenuManagementPage> {
                                       )
                                     : null,
                               ),
-                              title: Text(
-                                item.name,
-                                style: GoogleFonts.poppins(
-                                  fontWeight: FontWeight.w600,
-                                  fontSize: 15,
-                                ),
+                              title: Row(
+                                children: [
+                                  Flexible(
+                                    child: Text(
+                                      item.name,
+                                      style: GoogleFonts.poppins(
+                                        fontWeight: FontWeight.w600,
+                                        fontSize: 15,
+                                      ),
+                                      overflow:
+                                          TextOverflow.ellipsis,
+                                    ),
+                                  ),
+                                  if (item.isSpecial) ...[
+                                    const SizedBox(width: 6),
+                                    Container(
+                                      padding: const EdgeInsets
+                                          .symmetric(
+                                          horizontal: 6, vertical: 2),
+                                      decoration: BoxDecoration(
+                                        color: Colors.amber.shade100,
+                                        borderRadius:
+                                            BorderRadius.circular(4),
+                                        border: Border.all(
+                                            color: Colors
+                                                .amber.shade300),
+                                      ),
+                                      child: Row(
+                                        mainAxisSize: MainAxisSize.min,
+                                        children: [
+                                          Icon(Icons.star_rounded,
+                                              size: 10,
+                                              color: Colors
+                                                  .amber.shade900),
+                                          const SizedBox(width: 2),
+                                          Text(
+                                            'SPECIAL',
+                                            style:
+                                                GoogleFonts.poppins(
+                                              fontSize: 8,
+                                              fontWeight:
+                                                  FontWeight.bold,
+                                              color: Colors
+                                                  .amber.shade900,
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                    ),
+                                  ],
+                                ],
                               ),
                               subtitle: Column(
                                 crossAxisAlignment:
@@ -1678,11 +1803,22 @@ class _AdminMenuManagementPageState extends State<AdminMenuManagementPage> {
                                       ),
                                     ],
                                   ),
-                                  const SizedBox(width: 8),
-                                  Icon(
-                                    Icons.edit,
-                                    color: Colors.grey.shade400,
-                                    size: 20,
+                                  const SizedBox(width: 4),
+                                  IconButton(
+                                    icon: Icon(
+                                      item.isSpecial
+                                          ? Icons.star_rounded
+                                          : Icons.star_border_rounded,
+                                      color: item.isSpecial
+                                          ? amber
+                                          : Colors.grey.shade400,
+                                      size: 22,
+                                    ),
+                                    tooltip: item.isSpecial
+                                        ? 'Remove from specials'
+                                        : "Mark as today's special",
+                                    onPressed: () =>
+                                        _toggleSpecial(item),
                                   ),
                                 ],
                               ),
@@ -1701,6 +1837,9 @@ class _AdminMenuManagementPageState extends State<AdminMenuManagementPage> {
     );
   }
 
+  // ─────────────────────────────────────────────
+  // EMPTY STATE
+  // ─────────────────────────────────────────────
   Widget _buildEmptyState() {
     return Center(
       child: Column(
@@ -1735,6 +1874,9 @@ class _AdminMenuManagementPageState extends State<AdminMenuManagementPage> {
     );
   }
 
+  // ─────────────────────────────────────────────
+  // INGREDIENT PICKER
+  // ─────────────────────────────────────────────
   Future<Map<String, dynamic>?> _pickIngredient(
       BuildContext context) async {
     final snap = await FirebaseFirestore.instance
@@ -1742,8 +1884,8 @@ class _AdminMenuManagementPageState extends State<AdminMenuManagementPage> {
         .orderBy('name')
         .get();
     final items = snap.docs
-        .map((d) => InventoryItemModel.fromMap(
-            d.id, d.data()))
+        .map((d) =>
+            InventoryItemModel.fromMap(d.id, d.data()))
         .where((i) => i.isIngredient)
         .toList();
 
@@ -1752,8 +1894,8 @@ class _AdminMenuManagementPageState extends State<AdminMenuManagementPage> {
     return showDialog<Map<String, dynamic>>(
       context: context,
       builder: (ctx) {
-        String q = ''; // lowercase search query
-        String rawName = ''; // original-case name
+        String q = '';
+        String rawName = '';
         String unit = 'pcs';
         final qtyCtrl = TextEditingController(text: '1');
         InventoryItemModel? selected;
@@ -1780,7 +1922,6 @@ class _AdminMenuManagementPageState extends State<AdminMenuManagementPage> {
                       setD(() {
                         rawName = v.trim();
                         q = rawName.toLowerCase();
-                        // Clear selection when user edits text
                         selected = null;
                       });
                     },
@@ -1793,9 +1934,8 @@ class _AdminMenuManagementPageState extends State<AdminMenuManagementPage> {
                       child: ListView(
                         shrinkWrap: true,
                         children: items
-                            .where((i) => i.name
-                                .toLowerCase()
-                                .contains(q))
+                            .where((i) =>
+                                i.name.toLowerCase().contains(q))
                             .map((i) => ListTile(
                                   dense: true,
                                   title: Text(i.name),
@@ -1822,8 +1962,8 @@ class _AdminMenuManagementPageState extends State<AdminMenuManagementPage> {
                       decoration: BoxDecoration(
                         color: Colors.amber.shade50,
                         borderRadius: BorderRadius.circular(8),
-                        border: Border.all(
-                            color: Colors.amber.shade200),
+                        border:
+                            Border.all(color: Colors.amber.shade200),
                       ),
                       child: Text(
                         'New ingredient "$rawName" will be created in inventory with 0 stock.',
@@ -1858,19 +1998,18 @@ class _AdminMenuManagementPageState extends State<AdminMenuManagementPage> {
             ),
             actions: [
               TextButton(
-                onPressed: creating
-                    ? null
-                    : () => Navigator.pop(ctx),
+                onPressed:
+                    creating ? null : () => Navigator.pop(ctx),
                 child: const Text('Cancel'),
               ),
               ElevatedButton(
                 onPressed: creating
                     ? null
                     : () async {
-                        final qty = double.tryParse(qtyCtrl.text) ?? 1;
+                        final qty =
+                            double.tryParse(qtyCtrl.text) ?? 1;
                         if (qty <= 0) return;
 
-                        // Existing ingredient picked
                         if (selected != null) {
                           Navigator.pop(ctx, {
                             'ingredientId': selected!.id,
@@ -1883,8 +2022,6 @@ class _AdminMenuManagementPageState extends State<AdminMenuManagementPage> {
 
                         if (rawName.isEmpty) return;
 
-                        // Create new ingredient in inventory NOW so
-                        // the recipe row gets a real id immediately.
                         setD(() => creating = true);
                         try {
                           final newDoc = await FirebaseFirestore
@@ -1942,7 +2079,9 @@ class _AdminMenuManagementPageState extends State<AdminMenuManagementPage> {
     );
   }
 
-
+  // ─────────────────────────────────────────────
+  // SHARED RECIPE EDITOR UI
+  // ─────────────────────────────────────────────
   Widget _buildRecipeSection({
     required BuildContext ctx,
     required List<Map<String, dynamic>> rows,
@@ -2017,7 +2156,6 @@ class _AdminMenuManagementPageState extends State<AdminMenuManagementPage> {
                         ],
                       ),
                     ),
-                    // ── EDIT qty / unit ──
                     IconButton(
                       icon: const Icon(Icons.edit,
                           size: 18, color: Color(0xFF5E35B1)),
@@ -2038,8 +2176,7 @@ class _AdminMenuManagementPageState extends State<AdminMenuManagementPage> {
                               title: Text(
                                   'Edit ${r['ingredientName']}',
                                   style: GoogleFonts.poppins(
-                                      fontWeight:
-                                          FontWeight.bold)),
+                                      fontWeight: FontWeight.bold)),
                               content: Column(
                                 mainAxisSize: MainAxisSize.min,
                                 children: [
@@ -2047,10 +2184,8 @@ class _AdminMenuManagementPageState extends State<AdminMenuManagementPage> {
                                     controller: qtyCtrl,
                                     keyboardType:
                                         TextInputType.number,
-                                    decoration:
-                                        const InputDecoration(
-                                            labelText:
-                                                'Qty per portion'),
+                                    decoration: const InputDecoration(
+                                        labelText: 'Qty per portion'),
                                   ),
                                   const SizedBox(height: 8),
                                   UnitPickerField(
@@ -2093,7 +2228,6 @@ class _AdminMenuManagementPageState extends State<AdminMenuManagementPage> {
                         }
                       },
                     ),
-                    // ── REMOVE row ──
                     IconButton(
                       icon: const Icon(Icons.close,
                           size: 18, color: Colors.red),
@@ -2110,6 +2244,9 @@ class _AdminMenuManagementPageState extends State<AdminMenuManagementPage> {
     );
   }
 
+  // ─────────────────────────────────────────────
+  // ADD ITEM DIALOG
+  // ─────────────────────────────────────────────
   void _showAddItemDialog(BuildContext outerCtx) {
     final nameController = TextEditingController();
     final priceController = TextEditingController();
@@ -2117,6 +2254,7 @@ class _AdminMenuManagementPageState extends State<AdminMenuManagementPage> {
     final descController = TextEditingController();
     String selectedCategory = 'Meals';
     bool isAvailable = true;
+    bool isSpecial = false;
     XFile? selectedImage;
     bool isUploading = false;
     List<Map<String, dynamic>> recipeRows = [];
@@ -2166,7 +2304,6 @@ class _AdminMenuManagementPageState extends State<AdminMenuManagementPage> {
                   ),
                   const SizedBox(height: 20),
 
-                  // Image picker
                   _buildImagePicker(
                     context: context,
                     selectedImage: selectedImage,
@@ -2207,7 +2344,13 @@ class _AdminMenuManagementPageState extends State<AdminMenuManagementPage> {
                             borderRadius: BorderRadius.circular(10)),
                         contentPadding: const EdgeInsets.symmetric(
                             horizontal: 14, vertical: 12)),
-                    items: ['Meals', 'Snacks', 'Drinks', 'Desserts', 'Pastas']
+                    items: [
+                      'Meals',
+                      'Snacks',
+                      'Drinks',
+                      'Desserts',
+                      'Pastas'
+                    ]
                         .map((cat) => DropdownMenuItem(
                             value: cat, child: Text(cat)))
                         .toList(),
@@ -2267,7 +2410,6 @@ class _AdminMenuManagementPageState extends State<AdminMenuManagementPage> {
                           contentPadding: const EdgeInsets.all(12))),
                   const SizedBox(height: 16),
 
-                  // ── RECIPE SECTION ──
                   _buildRecipeSection(
                     ctx: context,
                     rows: recipeRows,
@@ -2277,14 +2419,29 @@ class _AdminMenuManagementPageState extends State<AdminMenuManagementPage> {
 
                   SwitchListTile(
                     contentPadding: EdgeInsets.zero,
-                    title: Text(
-                        'Available for ordering today',
+                    title: Text('Available for ordering today',
                         style: GoogleFonts.poppins(
                             fontWeight: FontWeight.w500)),
                     value: isAvailable,
                     activeThumbColor: green,
                     onChanged: (val) =>
                         setModalState(() => isAvailable = val),
+                  ),
+                  SwitchListTile(
+                    contentPadding: EdgeInsets.zero,
+                    title: Text("Mark as Today's Special",
+                        style: GoogleFonts.poppins(
+                            fontWeight: FontWeight.w500)),
+                    subtitle: Text(
+                      'Shows up in the student home screen',
+                      style: GoogleFonts.poppins(
+                          fontSize: 11,
+                          color: Colors.grey.shade600),
+                    ),
+                    value: isSpecial,
+                    activeThumbColor: amber,
+                    onChanged: (val) =>
+                        setModalState(() => isSpecial = val),
                   ),
                   const SizedBox(height: 24),
 
@@ -2335,6 +2492,7 @@ class _AdminMenuManagementPageState extends State<AdminMenuManagementPage> {
                                               stockController.text) ??
                                           0,
                                       isAvailable: isAvailable,
+                                      isSpecial: isSpecial,
                                       recipe: recipe,
                                     );
                                     await _addItem(
@@ -2354,8 +2512,8 @@ class _AdminMenuManagementPageState extends State<AdminMenuManagementPage> {
                                     if (context.mounted) {
                                       ScaffoldMessenger.of(context)
                                           .showSnackBar(SnackBar(
-                                        content:
-                                            Text('Error adding item: $e'),
+                                        content: Text(
+                                            'Error adding item: $e'),
                                         backgroundColor: Colors.red,
                                       ));
                                     }
@@ -2409,7 +2567,9 @@ class _AdminMenuManagementPageState extends State<AdminMenuManagementPage> {
     );
   }
 
-
+  // ─────────────────────────────────────────────
+  // EDIT ITEM DIALOG
+  // ─────────────────────────────────────────────
   void _showEditItemDialog(BuildContext outerCtx, MenuItemModel item) {
     final nameController = TextEditingController(text: item.name);
     final priceController =
@@ -2420,11 +2580,11 @@ class _AdminMenuManagementPageState extends State<AdminMenuManagementPage> {
         TextEditingController(text: item.description);
     String selectedCategory = item.category;
     bool isAvailable = item.isAvailable;
+    bool isSpecial = item.isSpecial;
     XFile? selectedImage;
     bool isUploading = false;
     String? existingImageUrl = item.imageUrl;
 
-    // Seed recipe rows from the existing item.
     List<Map<String, dynamic>> recipeRows = item.recipe
         .map((r) => {
               'ingredientId': r.ingredientId,
@@ -2526,7 +2686,13 @@ class _AdminMenuManagementPageState extends State<AdminMenuManagementPage> {
                             borderRadius: BorderRadius.circular(10)),
                         contentPadding: const EdgeInsets.symmetric(
                             horizontal: 14, vertical: 12)),
-                    items: ['Meals', 'Snacks', 'Drinks', 'Desserts', 'Pastas']
+                    items: [
+                      'Meals',
+                      'Snacks',
+                      'Drinks',
+                      'Desserts',
+                      'Pastas'
+                    ]
                         .map((cat) => DropdownMenuItem(
                             value: cat, child: Text(cat)))
                         .toList(),
@@ -2586,7 +2752,6 @@ class _AdminMenuManagementPageState extends State<AdminMenuManagementPage> {
                           contentPadding: const EdgeInsets.all(12))),
                   const SizedBox(height: 16),
 
-                  // ── RECIPE SECTION ──
                   _buildRecipeSection(
                     ctx: context,
                     rows: recipeRows,
@@ -2596,14 +2761,29 @@ class _AdminMenuManagementPageState extends State<AdminMenuManagementPage> {
 
                   SwitchListTile(
                     contentPadding: EdgeInsets.zero,
-                    title: Text(
-                        'Available for ordering today',
+                    title: Text('Available for ordering today',
                         style: GoogleFonts.poppins(
                             fontWeight: FontWeight.w500)),
                     value: isAvailable,
                     activeThumbColor: green,
                     onChanged: (val) =>
                         setModalState(() => isAvailable = val),
+                  ),
+                  SwitchListTile(
+                    contentPadding: EdgeInsets.zero,
+                    title: Text("Mark as Today's Special",
+                        style: GoogleFonts.poppins(
+                            fontWeight: FontWeight.w500)),
+                    subtitle: Text(
+                      'Shows up in the student home screen',
+                      style: GoogleFonts.poppins(
+                          fontSize: 11,
+                          color: Colors.grey.shade600),
+                    ),
+                    value: isSpecial,
+                    activeThumbColor: amber,
+                    onChanged: (val) =>
+                        setModalState(() => isSpecial = val),
                   ),
                   const SizedBox(height: 24),
 
@@ -2645,11 +2825,13 @@ class _AdminMenuManagementPageState extends State<AdminMenuManagementPage> {
                                               stockController.text) ??
                                           item.stock,
                                       isAvailable: isAvailable,
+                                      isSpecial: isSpecial,
                                       imageUrl: existingImageUrl,
                                       recipe: recipe,
                                     );
 
-                                    await _updateItem( item.id,  updatedItem,  selectedImage,);
+                                    await _updateItem(item.id,
+                                        updatedItem, selectedImage);
                                     if (context.mounted) {
                                       Navigator.pop(context);
                                       ScaffoldMessenger.of(context)
@@ -2720,6 +2902,9 @@ class _AdminMenuManagementPageState extends State<AdminMenuManagementPage> {
     );
   }
 
+  // ─────────────────────────────────────────────
+  // SHARED IMAGE PICKER
+  // ─────────────────────────────────────────────
   Widget _buildImagePicker({
     required BuildContext context,
     required XFile? selectedImage,
@@ -2813,8 +2998,7 @@ class _AdminMenuManagementPageState extends State<AdminMenuManagementPage> {
                         child: IconButton(
                           icon: const Icon(Icons.close,
                               color: Colors.white, size: 16),
-                          onPressed:
-                              onClearExisting ?? () {},
+                          onPressed: onClearExisting ?? () {},
                           padding: EdgeInsets.zero,
                         ),
                       ),

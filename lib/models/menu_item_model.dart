@@ -1,10 +1,6 @@
-// lib/models/menu_item_model.dart
-
-/// One line of a menu item's recipe:
-/// "this dish uses X of ingredient Y per portion".
 class RecipeIngredient {
   final String ingredientId;
-  final String ingredientName; // denormalized for display
+  final String ingredientName;
   final String unit;
   final double qtyPerPortion;
 
@@ -40,6 +36,7 @@ class MenuItemModel {
   String description;
   int stock;
   bool isAvailable;
+  bool isSpecial;             // ← NEW
   String? imageUrl;
   List<RecipeIngredient> recipe;
 
@@ -51,6 +48,7 @@ class MenuItemModel {
     required this.description,
     required this.stock,
     this.isAvailable = true,
+    this.isSpecial = false,   // ← NEW
     this.imageUrl,
     List<RecipeIngredient>? recipe,
   }) : recipe = recipe ?? [];
@@ -62,6 +60,7 @@ class MenuItemModel {
     String? description,
     int? stock,
     bool? isAvailable,
+    bool? isSpecial,          // ← NEW
     String? imageUrl,
     List<RecipeIngredient>? recipe,
   }) {
@@ -73,6 +72,7 @@ class MenuItemModel {
       description: description ?? this.description,
       stock: stock ?? this.stock,
       isAvailable: isAvailable ?? this.isAvailable,
+      isSpecial: isSpecial ?? this.isSpecial,   // ← NEW
       imageUrl: imageUrl ?? this.imageUrl,
       recipe: recipe ?? this.recipe,
     );
@@ -88,6 +88,7 @@ class MenuItemModel {
       description: map['description'] ?? '',
       stock: map['stock'] ?? 0,
       isAvailable: map['isAvailable'] ?? true,
+      isSpecial: map['isSpecial'] ?? false,     // ← NEW
       imageUrl: (map['image_url'] ?? map['imageUrl']) as String?,
       recipe: rawRecipe
           .whereType<Map>()
@@ -104,6 +105,7 @@ class MenuItemModel {
       'description': description,
       'stock': stock,
       'isAvailable': isAvailable,
+      'isSpecial': isSpecial,                   // ← NEW
       'image_url': imageUrl,
       'imageUrl': imageUrl,
       'recipe': recipe.map((r) => r.toMap()).toList(),

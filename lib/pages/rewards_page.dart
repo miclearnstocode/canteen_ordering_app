@@ -1,81 +1,48 @@
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:qr_flutter/qr_flutter.dart';
-import '../services/student_state.dart';
-import '../models/loyalty_reward_model.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart';
+import '../models/loyalty_reward_model.dart';
+import '../models/user_model.dart';
+import '../services/user_stream_service.dart';
 
-
-class RewardData {
-  final String id;
-  final String name;
-  final int points;
-  final String imageUrl;
-  final IconData icon;
-
-  RewardData({
-    required this.id,
-    required this.name,
-    required this.points,
-    required this.imageUrl,
-    required this.icon,
-  });
-}
-
-class RewardsPage extends StatefulWidget {
+class RewardsPage extends StatelessWidget {
   const RewardsPage({super.key});
 
   @override
-  State<RewardsPage> createState() => _RewardsPageState();
-}
-
-class _RewardsPageState extends State<RewardsPage> {
-  final Color primaryColor = const Color(0xFF1E7B3B);
-  final StudentAppState _state = StudentAppState();
-  final FirebaseFirestore _firestore = FirebaseFirestore.instance;
-
-  IconData _iconFor(String name) {
-    final n = name.toLowerCase();
-    if (n.contains('rice')) return Icons.rice_bowl_rounded;
-    if (n.contains('drink') || n.contains('juice')) {
-      return Icons.local_drink_rounded;
-    }
-    if (n.contains('fries') || n.contains('snack')) {
-      return Icons.fastfood_rounded;
-    }
-    if (n.contains('burger') || n.contains('meal')) {
-      return Icons.lunch_dining_rounded;
-    }
-    return Icons.card_giftcard_rounded;
-  }
-
-  @override
   Widget build(BuildContext context) {
-    return AnimatedBuilder(
-      animation: _state,
-      builder: (context, _) {
-        return Scaffold(
-          backgroundColor: const Color(0xFFF8F9FA),
-          appBar: AppBar(
-            backgroundColor: Colors.white,
-            elevation: 0,
-            centerTitle: true,
-            title: Text(
-              'My Rewards',
-              style: GoogleFonts.poppins(
-                fontWeight: FontWeight.w700,
-                fontSize: 20,
-                color: Colors.black87,
-              ),
-            ),
+    final primaryColor = const Color(0xFF1E7B3B);
+    final firestore = FirebaseFirestore.instance;
+
+    return Scaffold(
+      backgroundColor: const Color(0xFFF8F9FA),
+      appBar: AppBar(
+        backgroundColor: Colors.white,
+        elevation: 0,
+        centerTitle: true,
+        title: Text(
+          'My Rewards',
+          style: GoogleFonts.poppins(
+            fontWeight: FontWeight.w700,
+            fontSize: 20,
+            color: Colors.black87,
           ),
-          body: StreamBuilder<QuerySnapshot>(
-            stream: _firestore
+        ),
+      ),
+      body: StreamBuilder<AppUser?>(
+        stream: UserStreamService.currentUserStream(),
+        builder: (context, userSnap) {
+          final user = userSnap.data;
+          final points = user?.points ?? 0;
+
+          return StreamBuilder<QuerySnapshot>(
+            stream: firestore
                 .collection('loyalty_rewards')
                 .orderBy('points')
                 .snapshots(),
-            builder: (context, snapshot) {
-              final rewards = (snapshot.data?.docs ?? [])
+            builder: (context, rewardSnap) {
+              final rewards = (rewardSnap.data?.docs ?? [])
                   .map((d) => LoyaltyReward.fromMap(
                       d.id, d.data() as Map<String, dynamic>))
                   .where((r) => r.isActive)
@@ -130,8 +97,7 @@ class _RewardsPageState extends State<RewardsPage> {
                                     TextSpan(
                                       children: [
                                         TextSpan(
-                                          text:
-                                              '${_state.loyaltyPoints} ',
+                                          text: '$points ',
                                           style: GoogleFonts.poppins(
                                             fontSize: 26,
                                             fontWeight: FontWeight.w800,
@@ -179,7 +145,7 @@ class _RewardsPageState extends State<RewardsPage> {
                     ),
                     const SizedBox(height: 14),
 
-                    if (snapshot.connectionState ==
+                    if (rewardSnap.connectionState ==
                         ConnectionState.waiting)
                       const Padding(
                         padding: EdgeInsets.all(40),
@@ -201,21 +167,45 @@ class _RewardsPageState extends State<RewardsPage> {
                     else
                       Column(
                         children: rewards
-                            .map((r) => _buildRewardCard(r))
+                            .map((r) => _buildRewardCard(
+                                  context,
+                                  r,
+                                  currentPoints: points,
+                                ))
                             .toList(),
                       ),
                   ],
                 ),
               );
             },
-          ),
-        );
-      },
+          );
+        },
+      ),
     );
   }
 
-  Widget _buildRewardCard(LoyaltyReward reward) {
-    final bool canRedeem = _state.loyaltyPoints >= reward.points;
+  IconData _iconFor(String name) {
+    final n = name.toLowerCase();
+    if (n.contains('rice')) return Icons.rice_bowl_rounded;
+    if (n.contains('drink') || n.contains('juice')) {
+      return Icons.local_drink_rounded;
+    }
+    if (n.contains('fries') || n.contains('snack')) {
+      return Icons.fastfood_rounded;
+    }
+    if (n.contains('burger') || n.contains('meal')) {
+      return Icons.lunch_dining_rounded;
+    }
+    return Icons.card_giftcard_rounded;
+  }
+
+  Widget _buildRewardCard(
+    BuildContext context,
+    LoyaltyReward reward, {
+    required int currentPoints,
+  }) {
+    final primaryColor = const Color(0xFF1E7B3B);
+    final bool canRedeem = currentPoints >= reward.points;
     final icon = _iconFor(reward.name);
 
     return Container(
@@ -283,20 +273,8 @@ class _RewardsPageState extends State<RewardsPage> {
             ),
           ),
           ElevatedButton(
-            onPressed: () {
-              if (canRedeem) {
-                _state.deductPoints(reward.points);
-                _showRedeemSuccess(context, reward as RewardData);
-              } else {
-                ScaffoldMessenger.of(context).showSnackBar(
-                  SnackBar(
-                    content: Text(
-                        'Not enough points! You need ${reward.points} points.'),
-                    backgroundColor: Colors.orange.shade800,
-                  ),
-                );
-              }
-            },
+            onPressed: () =>
+                _handleRedeem(context, reward, canRedeem),
             style: ElevatedButton.styleFrom(
               backgroundColor:
                   canRedeem ? primaryColor : Colors.grey.shade400,
@@ -321,17 +299,86 @@ class _RewardsPageState extends State<RewardsPage> {
     );
   }
 
-  void _showRedeemSuccess(BuildContext context, RewardData reward) {
+  Future<void> _handleRedeem(
+    BuildContext context,
+    LoyaltyReward reward,
+    bool canRedeem,
+  ) async {
+    final primaryColor = const Color(0xFF1E7B3B);
+    if (!canRedeem) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+              'Not enough points! You need ${reward.points} points.'),
+          backgroundColor: Colors.orange.shade800,
+        ),
+      );
+      return;
+    }
+
+    final uid = FirebaseAuth.instance.currentUser?.uid;
+    if (uid == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Please log in first.')),
+      );
+      return;
+    }
+
+    try {
+      await FirebaseFirestore.instance.runTransaction((tx) async {
+        final userRef =
+            FirebaseFirestore.instance.collection('users').doc(uid);
+        final userSnap = await tx.get(userRef);
+        final current =
+            (userSnap.data()?['points'] as num?)?.toInt() ?? 0;
+        if (current < reward.points) {
+          throw Exception('Insufficient points.');
+        }
+        final newPoints = current - reward.points;
+        tx.update(userRef, {
+          'points': newPoints,
+          'updatedAt': FieldValue.serverTimestamp(),
+        });
+
+        final logRef = FirebaseFirestore.instance
+            .collection('points_transactions')
+            .doc();
+        tx.set(logRef, {
+          'uid': uid,
+          'type': 'redeem',
+          'amount': reward.points,
+          'balanceAfter': newPoints,
+          'note': 'Redeemed: ${reward.name}',
+          'rewardId': reward.id,
+          'timestamp': FieldValue.serverTimestamp(),
+        });
+      });
+
+      if (context.mounted) _showRedeemSuccess(context, reward);
+    } catch (e) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Failed: ${e.toString().replaceFirst('Exception: ', '')}'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    }
+  }
+
+  void _showRedeemSuccess(BuildContext context, LoyaltyReward reward) {
+    final primaryColor = const Color(0xFF1E7B3B);
     showDialog(
       context: context,
       builder: (context) => Dialog(
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
+        shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(24)),
         child: Padding(
           padding: const EdgeInsets.all(24),
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              // Checkmark Icon
               Container(
                 width: 56,
                 height: 56,
@@ -346,8 +393,6 @@ class _RewardsPageState extends State<RewardsPage> {
                 ),
               ),
               const SizedBox(height: 16),
-
-              // Title
               Text(
                 'Reward Redeemed!',
                 style: GoogleFonts.poppins(
@@ -357,8 +402,6 @@ class _RewardsPageState extends State<RewardsPage> {
                 ),
               ),
               const SizedBox(height: 8),
-
-              // Subtitle 1
               Text(
                 'You have successfully redeemed\n${reward.name} (${reward.points} Points).',
                 textAlign: TextAlign.center,
@@ -369,8 +412,6 @@ class _RewardsPageState extends State<RewardsPage> {
                 ),
               ),
               const SizedBox(height: 6),
-
-              // Subtitle 2
               Text(
                 'Show this QR Code to the staff',
                 textAlign: TextAlign.center,
@@ -380,8 +421,6 @@ class _RewardsPageState extends State<RewardsPage> {
                 ),
               ),
               const SizedBox(height: 16),
-
-              // QR Code
               Container(
                 padding: const EdgeInsets.all(12),
                 decoration: BoxDecoration(
@@ -390,16 +429,16 @@ class _RewardsPageState extends State<RewardsPage> {
                   border: Border.all(color: Colors.grey.shade300),
                 ),
                 child: QrImageView(
-                  data: 'CLAIM-${reward.id.toUpperCase()}-${DateTime.now().millisecondsSinceEpoch}',
+                  data:
+                      'CLAIM-${reward.id.toUpperCase()}-${DateTime.now().millisecondsSinceEpoch}',
                   version: QrVersions.auto,
                   size: 160.0,
                 ),
               ),
               const SizedBox(height: 14),
-
-              // Status Badge
               Container(
-                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                padding: const EdgeInsets.symmetric(
+                    horizontal: 16, vertical: 8),
                 decoration: BoxDecoration(
                   color: const Color(0xFFFFF3E0),
                   borderRadius: BorderRadius.circular(10),
@@ -415,8 +454,6 @@ class _RewardsPageState extends State<RewardsPage> {
                 ),
               ),
               const SizedBox(height: 20),
-
-              // Done Button
               SizedBox(
                 width: double.infinity,
                 height: 48,
