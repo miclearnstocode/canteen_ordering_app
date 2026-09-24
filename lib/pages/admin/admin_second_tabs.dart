@@ -210,7 +210,7 @@ class _AdminRedemptionPageState extends State<AdminRedemptionPage> {
 }
 
 // ==========================================
-// 7. ADMIN PAYMENTS PAGE (LIVE)
+// 7. ADMIN PAYMENTS PAGE
 // ==========================================
 class AdminPaymentsPage extends StatefulWidget {
   const AdminPaymentsPage({super.key});
@@ -666,28 +666,365 @@ class _CreditTx {
 }
 
 // ==========================================
-// 8. ADMIN REPORTS PAGE
+// 8. ADMIN REPORTS PAGE (LIVE)
 // ==========================================
-class AdminReportsPage extends StatelessWidget {
+class AdminReportsPage extends StatefulWidget {
   const AdminReportsPage({super.key});
+
+  @override
+  State<AdminReportsPage> createState() => _AdminReportsPageState();
+}
+
+class _AdminReportsPageState extends State<AdminReportsPage> {
   static const Color adminPurple = Color(0xFF5E35B1);
   static const Color green = Color(0xFF2E7D32);
 
-  void _showReportDialog(BuildContext context, String title) {
+  final FirebaseFirestore _firestore = FirebaseFirestore.instance;
+
+  bool _loading = true;
+  String? _error;
+
+  // ── Computed report data ──
+  _DailyReport _daily = _DailyReport.empty();
+  _MonthlyReport _monthly = _MonthlyReport.empty();
+  List<_TopItem> _topItems = [];
+  _InventoryReport _inventory = _InventoryReport.empty();
+  _LoyaltyReport _loyalty = _LoyaltyReport.empty();
+
+  @override
+  void initState() {
+    super.initState();
+    _loadAll();
+  }
+
+  Future<void> _loadAll() async {
+    setState(() {
+      _loading = true;
+      _error = null;
+    });
+
+    try {
+      // Fire off all fetches in parallel.
+      final results = await Future.wait([
+        _firestore.collection('orders').get(),
+        _firestore.collection('inventory').get(),
+        _firestore.collection('points_transactions').get(),
+      ]);
+
+      final ordersSnap = results[0];
+      final invSnap = results[1];
+      final pointsSnap = results[2];
+
+      final now = DateTime.now();
+      final todayStart = DateTime(now.year, now.month, now.day);
+      final monthStart = DateTime(now.year, now.month, 1);
+
+      // ── Parse orders ──
+      double todayTotal = 0;
+      int todayOrders = 0;
+      double monthlyTotal = 0;
+      int monthlyOrders = 0;
+      final Map<String, _TopItem> itemMap = {};
+
+      for (final doc in ordersSnap.docs) {
+        final d = doc.data();
+        final status = (d['status'] ?? '').toString().toLowerCase();
+        final total = (d['total'] as num?)?.toDouble() ?? 0;
+        final created = (d['createdAt'] as Timestamp?)?.toDate();
+
+        // Daily & monthly only count non-cancelled orders.
+        if (status == 'cancelled' || created == null) continue;
+
+        if (created.isAfter(todayStart)) {
+          todayOrders++;
+          todayTotal += total;
+        }
+        if (created.isAfter(monthStart)) {
+          monthlyOrders++;
+          monthlyTotal += total;
+        }
+
+        // Aggregate top items from all non-cancelled orders.
+        final items = (d['items'] as List?) ?? const [];
+        for (final raw in items) {
+          if (raw is! Map) continue;
+          final name = (raw['name'] ?? 'Unknown').toString();
+          final qty = (raw['quantity'] as num?)?.toInt() ?? 0;
+          final price = (raw['price'] as num?)?.toDouble() ?? 0;
+          final existing = itemMap[name];
+          if (existing == null) {
+            itemMap[name] = _TopItem(
+              name: name,
+              quantity: qty,
+              revenue: price * qty,
+            );
+          } else {
+            existing.quantity += qty;
+            existing.revenue += price * qty;
+          }
+        }
+      }
+
+      final top = itemMap.values.toList()
+        ..sort((a, b) => b.quantity.compareTo(a.quantity));
+
+      // ── Inventory low/out ──
+      final low = <_InvItem>[];
+      final out = <_InvItem>[];
+      for (final doc in invSnap.docs) {
+        final d = doc.data();
+        final stock = (d['stock'] as num?)?.toDouble() ?? 0;
+        final minLevel = (d['minLevel'] as num?)?.toDouble() ?? 0;
+        final name = (d['name'] ?? '').toString();
+        final unit = (d['unit'] ?? '').toString();
+        final type = (d['type'] ?? '').toString();
+
+        if (stock <= 0) {
+          out.add(_InvItem(
+              name: name, unit: unit, stock: stock, type: type));
+        } else if (stock <= minLevel) {
+          low.add(_InvItem(
+              name: name, unit: unit, stock: stock, type: type));
+        }
+      }
+      low.sort((a, b) => a.stock.compareTo(b.stock));
+      out.sort((a, b) => a.name.compareTo(b.name));
+
+      // ── Loyalty points ──
+      int totalEarned = 0;
+      int totalRedeemed = 0;
+      int totalRefunded = 0;
+      for (final doc in pointsSnap.docs) {
+        final d = doc.data();
+        final type = (d['type'] ?? '').toString();
+        final amount = (d['amount'] as num?)?.toInt() ?? 0;
+        switch (type) {
+          case 'earn':
+            totalEarned += amount;
+            break;
+          case 'redeem':
+            totalRedeemed += amount.abs();
+            break;
+          case 'refund':
+            totalRefunded += amount.abs();
+            break;
+        }
+      }
+
+      if (!mounted) return;
+      setState(() {
+        _daily = _DailyReport(
+          orders: todayOrders,
+          revenue: todayTotal,
+          avgTicket: todayOrders > 0 ? todayTotal / todayOrders : 0,
+        );
+        _monthly = _MonthlyReport(
+          orders: monthlyOrders,
+          revenue: monthlyTotal,
+          avgTicket:
+              monthlyOrders > 0 ? monthlyTotal / monthlyOrders : 0,
+          monthLabel: _monthName(now.month) + ' ' + now.year.toString(),
+        );
+        _topItems = top.take(5).toList();
+        _inventory = _InventoryReport(low: low, out: out);
+        _loyalty = _LoyaltyReport(
+          earned: totalEarned,
+          redeemed: totalRedeemed,
+          refunded: totalRefunded,
+          net: totalEarned - totalRedeemed - totalRefunded,
+        );
+        _loading = false;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _error = e.toString();
+        _loading = false;
+      });
+    }
+  }
+
+  static String _monthName(int m) {
+    const names = [
+      'January', 'February', 'March', 'April', 'May', 'June',
+      'July', 'August', 'September', 'October', 'November', 'December',
+    ];
+    return names[m - 1];
+  }
+
+  // ─────────────────────────────────────────────
+  // DIALOGS
+  // ─────────────────────────────────────────────
+  void _showDailyReport() {
+    _showReportDialog(
+      title: 'Daily Sales Report',
+      subtitle: 'Today • ${DateTime.now().toLocal()}'.split('.').first,
+      rows: [
+        _row('Total Orders', '${_daily.orders}'),
+        _row('Total Revenue', '₱${_daily.revenue.toStringAsFixed(2)}'),
+        _row('Average Ticket', '₱${_daily.avgTicket.toStringAsFixed(2)}'),
+      ],
+    );
+  }
+
+  void _showMonthlyReport() {
+    _showReportDialog(
+      title: 'Monthly Sales Report',
+      subtitle: _monthly.monthLabel,
+      rows: [
+        _row('Total Orders', '${_monthly.orders}'),
+        _row('Total Revenue', '₱${_monthly.revenue.toStringAsFixed(2)}'),
+        _row('Average Ticket',
+            '₱${_monthly.avgTicket.toStringAsFixed(2)}'),
+      ],
+    );
+  }
+
+  void _showTopItemsReport() {
+    if (_topItems.isEmpty) {
+      _showReportDialog(
+        title: 'Best Selling Foods',
+        subtitle: 'No orders yet',
+        rows: [],
+      );
+      return;
+    }
+    _showReportDialog(
+      title: 'Best Selling Foods',
+      subtitle: 'Top ${_topItems.length} by quantity sold',
+      rows: [
+        for (int i = 0; i < _topItems.length; i++)
+          _row(
+            '${i + 1}. ${_topItems[i].name}',
+            '${_topItems[i].quantity} sold • ₱${_topItems[i].revenue.toStringAsFixed(0)}',
+          ),
+      ],
+    );
+  }
+
+  void _showInventoryReport() {
+    final rows = <_DialogRow>[];
+    if (_inventory.out.isNotEmpty) {
+      rows.add(_row('⛔ Out of Stock',
+          '${_inventory.out.length} item(s)'));
+      for (final item in _inventory.out) {
+        rows.add(_row('   • ${item.name}',
+            '0 ${item.unit}'));
+      }
+    }
+    if (_inventory.low.isNotEmpty) {
+      rows.add(_row('⚠️ Low Stock',
+          '${_inventory.low.length} item(s)'));
+      for (final item in _inventory.low) {
+        rows.add(_row('   • ${item.name}',
+            '${item.stock} ${item.unit}'));
+      }
+    }
+    if (rows.isEmpty) {
+      rows.add(_row('Status', 'All items are well-stocked'));
+    }
+    _showReportDialog(
+      title: 'Inventory Restock Report',
+      subtitle: 'Items that need restocking',
+      rows: rows,
+    );
+  }
+
+  void _showLoyaltyReport() {
+    _showReportDialog(
+      title: 'Loyalty Points Report',
+      subtitle: 'Points earned and redeemed',
+      rows: [
+        _row('Total Points Earned', '${_loyalty.earned}'),
+        _row('Total Points Redeemed', '${_loyalty.redeemed}'),
+        _row('Total Points Refunded', '${_loyalty.refunded}'),
+        _row('Net Points in Circulation', '${_loyalty.net}'),
+      ],
+    );
+  }
+
+  _DialogRow _row(String label, String value) =>
+      _DialogRow(label: label, value: value);
+
+  void _showReportDialog({
+    required String title,
+    required String subtitle,
+    required List<_DialogRow> rows,
+  }) {
     showDialog(
       context: context,
-      builder: (context) => AlertDialog(
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
-        title: Text(title, style: GoogleFonts.poppins(fontWeight: FontWeight.bold)),
-        content: Text('Report generated for the period.\n\nTotal Entries: 235\nTotal Volume: ₱18,500\nAverage Ticket Size: ₱78.72', style: GoogleFonts.poppins(fontSize: 13)),
+      builder: (ctx) => AlertDialog(
+        shape:
+            RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
+        title: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(title,
+                style: GoogleFonts.poppins(
+                    fontWeight: FontWeight.bold, fontSize: 16)),
+            const SizedBox(height: 4),
+            Text(subtitle,
+                style: GoogleFonts.poppins(
+                    fontSize: 11, color: Colors.grey.shade600)),
+          ],
+        ),
+        content: SizedBox(
+          width: 380,
+          child: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                for (final r in rows)
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 8),
+                    child: Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Expanded(
+                          flex: 3,
+                          child: Text(
+                            r.label,
+                            style: GoogleFonts.poppins(
+                              fontSize: 12,
+                              color: Colors.grey.shade700,
+                            ),
+                          ),
+                        ),
+                        Expanded(
+                          flex: 2,
+                          child: Text(
+                            r.value,
+                            textAlign: TextAlign.right,
+                            style: GoogleFonts.poppins(
+                              fontSize: 12,
+                              fontWeight: FontWeight.w700,
+                              color: Colors.black87,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+              ],
+            ),
+          ),
+        ),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(context), child: const Text('Close')),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Close'),
+          ),
           ElevatedButton(
             onPressed: () {
-              Navigator.pop(context);
-              ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Downloading $title...'), backgroundColor: green));
+              Navigator.pop(ctx);
+              ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+                content: Text('Downloading $title...'),
+                backgroundColor: green,
+              ));
             },
-            style: ElevatedButton.styleFrom(backgroundColor: green, foregroundColor: Colors.white),
+            style: ElevatedButton.styleFrom(
+                backgroundColor: green, foregroundColor: Colors.white),
             child: const Text('Download PDF'),
           ),
         ],
@@ -695,6 +1032,9 @@ class AdminReportsPage extends StatelessWidget {
     );
   }
 
+  // ─────────────────────────────────────────────
+  // BUILD
+  // ─────────────────────────────────────────────
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -704,83 +1044,397 @@ class AdminReportsPage extends StatelessWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text('Sales & Analytical Reports', style: GoogleFonts.poppins(fontSize: 24, fontWeight: FontWeight.w700)),
-            const SizedBox(height: 16),
-            Container(
-              decoration: BoxDecoration(
-                color: Colors.white,
-                borderRadius: BorderRadius.circular(18),
-                border: Border.all(color: Colors.grey.shade200),
-              ),
-              child: Column(
-                children: [
-                  _reportTile(context, Icons.calendar_today, 'Daily Sales Report', 'Summary of all transactions today'),
-                  const Divider(height: 1),
-                  _reportTile(context, Icons.calendar_month, 'Monthly Sales Report', 'Revenue breakdown for current month'),
-                  const Divider(height: 1),
-                  _reportTile(context, Icons.restaurant, 'Best Selling Foods', 'Top ordered food items & quantity'),
-                  const Divider(height: 1),
-                  _reportTile(context, Icons.inventory_2_outlined, 'Inventory Restock Report', 'Low stock items and alert history'),
-                  const Divider(height: 1),
-                  _reportTile(context, Icons.stars, 'Loyalty Points Redemption Report', 'Rewards claimed and points deducted'),
-                ],
-              ),
-            ),
-            const SizedBox(height: 24),
             Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
-                Expanded(
-                  child: ElevatedButton.icon(
-                    onPressed: () {
-                      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Exporting PDF...')));
-                    },
-                    icon: const Icon(Icons.picture_as_pdf),
-                    label: const Text('Export All PDF'),
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: Colors.red.shade700,
-                      foregroundColor: Colors.white,
-                      padding: const EdgeInsets.symmetric(vertical: 14),
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-                    ),
-                  ),
+                Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text('Sales & Analytical Reports',
+                        style: GoogleFonts.poppins(
+                            fontSize: 24,
+                            fontWeight: FontWeight.w700)),
+                    const SizedBox(height: 2),
+                    Text('Live data from your Firestore',
+                        style: GoogleFonts.poppins(
+                            fontSize: 12,
+                            color: Colors.grey.shade600)),
+                  ],
                 ),
-                const SizedBox(width: 16),
-                Expanded(
-                  child: ElevatedButton.icon(
-                    onPressed: () {
-                      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Exporting Excel spreadsheet...'), backgroundColor: green));
-                    },
-                    icon: const Icon(Icons.grid_on),
-                    label: const Text('Export Excel (CSV)'),
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: green,
-                      foregroundColor: Colors.white,
-                      padding: const EdgeInsets.symmetric(vertical: 14),
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-                    ),
-                  ),
+                IconButton(
+                  onPressed: _loading ? null : _loadAll,
+                  tooltip: 'Refresh',
+                  icon: const Icon(Icons.refresh),
                 ),
               ],
             ),
+            const SizedBox(height: 16),
+
+            if (_loading)
+              const Expanded(
+                child: Center(child: CircularProgressIndicator()),
+              )
+            else if (_error != null)
+              Expanded(
+                child: Center(
+                  child: Padding(
+                    padding: const EdgeInsets.all(16),
+                    child: Text(
+                      'Failed to load reports:\n$_error',
+                      textAlign: TextAlign.center,
+                      style: GoogleFonts.poppins(
+                          color: Colors.red.shade700, fontSize: 12),
+                    ),
+                  ),
+                ),
+              )
+            else
+              Expanded(
+                child: SingleChildScrollView(
+                  child: Column(
+                    children: [
+                      // ── Quick summary cards ──
+                      LayoutBuilder(
+                        builder: (context, c) {
+                          final isWide = c.maxWidth >= 750;
+                          final w = isWide
+                              ? (c.maxWidth - 24) / 3
+                              : c.maxWidth;
+                          return Wrap(
+                            spacing: 12,
+                            runSpacing: 12,
+                            children: [
+                              SizedBox(
+                                width: w,
+                                child: _summaryTile(
+                                  icon: Icons.today,
+                                  label: "Today's Revenue",
+                                  value:
+                                      '₱${_daily.revenue.toStringAsFixed(0)}',
+                                  subtitle: '${_daily.orders} orders',
+                                  color: green,
+                                ),
+                              ),
+                              SizedBox(
+                                width: w,
+                                child: _summaryTile(
+                                  icon: Icons.calendar_month,
+                                  label: 'This Month',
+                                  value:
+                                      '₱${_monthly.revenue.toStringAsFixed(0)}',
+                                  subtitle: '${_monthly.orders} orders',
+                                  color: adminPurple,
+                                ),
+                              ),
+                              SizedBox(
+                                width: w,
+                                child: _summaryTile(
+                                  icon: Icons.warning_amber_rounded,
+                                  label: 'Need Restocking',
+                                  value:
+                                      '${_inventory.low.length + _inventory.out.length}',
+                                  subtitle:
+                                      '${_inventory.out.length} out • ${_inventory.low.length} low',
+                                  color: Colors.orange.shade800,
+                                ),
+                              ),
+                            ],
+                          );
+                        },
+                      ),
+                      const SizedBox(height: 20),
+
+                      // ── Report tiles ──
+                      Container(
+                        decoration: BoxDecoration(
+                          color: Colors.white,
+                          borderRadius: BorderRadius.circular(18),
+                          border: Border.all(color: Colors.grey.shade200),
+                        ),
+                        child: Column(
+                          children: [
+                            _reportTile(
+                              context,
+                              Icons.calendar_today,
+                              'Daily Sales Report',
+                              'Summary of all transactions today',
+                              _showDailyReport,
+                            ),
+                            const Divider(height: 1),
+                            _reportTile(
+                              context,
+                              Icons.calendar_month,
+                              'Monthly Sales Report',
+                              'Revenue breakdown for current month',
+                              _showMonthlyReport,
+                            ),
+                            const Divider(height: 1),
+                            _reportTile(
+                              context,
+                              Icons.restaurant,
+                              'Best Selling Foods',
+                              _topItems.isEmpty
+                                  ? 'No sales data yet'
+                                  : 'Top ${_topItems.length} by quantity sold',
+                              _showTopItemsReport,
+                            ),
+                            const Divider(height: 1),
+                            _reportTile(
+                              context,
+                              Icons.inventory_2_outlined,
+                              'Inventory Restock Report',
+                              _inventory.out.isEmpty &&
+                                      _inventory.low.isEmpty
+                                  ? 'All items are well-stocked'
+                                  : '${_inventory.out.length} out • ${_inventory.low.length} low',
+                              _showInventoryReport,
+                            ),
+                            const Divider(height: 1),
+                            _reportTile(
+                              context,
+                              Icons.stars,
+                              'Loyalty Points Report',
+                              '${_loyalty.earned} earned • ${_loyalty.redeemed} redeemed',
+                              _showLoyaltyReport,
+                            ),
+                          ],
+                        ),
+                      ),
+                      const SizedBox(height: 24),
+
+                      // ── Export buttons ──
+                      Row(
+                        children: [
+                          Expanded(
+                            child: ElevatedButton.icon(
+                              onPressed: () {
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                    const SnackBar(
+                                        content:
+                                            Text('Exporting PDF...')));
+                              },
+                              icon: const Icon(Icons.picture_as_pdf),
+                              label: const Text('Export All PDF'),
+                              style: ElevatedButton.styleFrom(
+                                backgroundColor: Colors.red.shade700,
+                                foregroundColor: Colors.white,
+                                padding: const EdgeInsets.symmetric(
+                                    vertical: 14),
+                                shape: RoundedRectangleBorder(
+                                    borderRadius:
+                                        BorderRadius.circular(10)),
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 16),
+                          Expanded(
+                            child: ElevatedButton.icon(
+                              onPressed: () {
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  const SnackBar(
+                                    content: Text(
+                                        'Exporting Excel spreadsheet...'),
+                                    backgroundColor: green,
+                                  ),
+                                );
+                              },
+                              icon: const Icon(Icons.grid_on),
+                              label: const Text('Export Excel (CSV)'),
+                              style: ElevatedButton.styleFrom(
+                                backgroundColor: green,
+                                foregroundColor: Colors.white,
+                                padding: const EdgeInsets.symmetric(
+                                    vertical: 14),
+                                shape: RoundedRectangleBorder(
+                                    borderRadius:
+                                        BorderRadius.circular(10)),
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
+              ),
           ],
         ),
       ),
     );
   }
 
-  Widget _reportTile(BuildContext context, IconData icon, String title, String subtitle) {
-    return ListTile(
-      leading: Container(
-        padding: const EdgeInsets.all(8),
-        decoration: BoxDecoration(color: adminPurple.withValues(alpha: 0.1), shape: BoxShape.circle),
-        child: Icon(icon, color: adminPurple, size: 20),
+  Widget _summaryTile({
+    required IconData icon,
+    required String label,
+    required String value,
+    required String subtitle,
+    required Color color,
+  }) {
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: Colors.grey.shade200),
       ),
-      title: Text(title, style: GoogleFonts.poppins(fontWeight: FontWeight.w600, fontSize: 14)),
-      subtitle: Text(subtitle, style: GoogleFonts.poppins(fontSize: 12, color: Colors.grey.shade600)),
-      trailing: const Icon(Icons.chevron_right, size: 20),
-      onTap: () => _showReportDialog(context, title),
+      child: Row(
+        children: [
+          Container(
+            padding: const EdgeInsets.all(10),
+            decoration: BoxDecoration(
+              color: color.withValues(alpha: 0.12),
+              borderRadius: BorderRadius.circular(10),
+            ),
+            child: Icon(icon, color: color, size: 22),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(label,
+                    style: GoogleFonts.poppins(
+                        fontSize: 11, color: Colors.grey.shade600)),
+                const SizedBox(height: 2),
+                Text(value,
+                    style: GoogleFonts.poppins(
+                        fontSize: 18,
+                        fontWeight: FontWeight.w800,
+                        color: color)),
+                Text(subtitle,
+                    style: GoogleFonts.poppins(
+                        fontSize: 10, color: Colors.grey.shade500)),
+              ],
+            ),
+          ),
+        ],
+      ),
     );
   }
+
+  Widget _reportTile(
+    BuildContext context,
+    IconData icon,
+    String title,
+    String subtitle,
+    VoidCallback onTap,
+  ) {
+    return ListTile(
+      onTap: onTap,
+      leading: Container(
+        padding: const EdgeInsets.all(8),
+        decoration: BoxDecoration(
+          color: adminPurple.withValues(alpha: 0.1),
+          shape: BoxShape.circle,
+        ),
+        child: Icon(icon, color: adminPurple, size: 20),
+      ),
+      title: Text(title,
+          style: GoogleFonts.poppins(
+              fontWeight: FontWeight.w600, fontSize: 14)),
+      subtitle: Text(subtitle,
+          style: GoogleFonts.poppins(
+              fontSize: 12, color: Colors.grey.shade600)),
+      trailing: const Icon(Icons.chevron_right, size: 20),
+    );
+  }
+}
+
+// ---------- Report data holders ----------
+class _DailyReport {
+  final int orders;
+  final double revenue;
+  final double avgTicket;
+
+  _DailyReport({
+    required this.orders,
+    required this.revenue,
+    required this.avgTicket,
+  });
+
+  factory _DailyReport.empty() =>
+      _DailyReport(orders: 0, revenue: 0, avgTicket: 0);
+}
+
+class _MonthlyReport {
+  final int orders;
+  final double revenue;
+  final double avgTicket;
+  final String monthLabel;
+
+  _MonthlyReport({
+    required this.orders,
+    required this.revenue,
+    required this.avgTicket,
+    required this.monthLabel,
+  });
+
+  factory _MonthlyReport.empty() => _MonthlyReport(
+        orders: 0,
+        revenue: 0,
+        avgTicket: 0,
+        monthLabel: '—',
+      );
+}
+
+class _TopItem {
+  final String name;
+  int quantity;
+  double revenue;
+
+  _TopItem({
+    required this.name,
+    required this.quantity,
+    required this.revenue,
+  });
+}
+
+class _InvItem {
+  final String name;
+  final String unit;
+  final double stock;
+  final String type;
+
+  _InvItem({
+    required this.name,
+    required this.unit,
+    required this.stock,
+    required this.type,
+  });
+}
+
+class _InventoryReport {
+  final List<_InvItem> low;
+  final List<_InvItem> out;
+
+  _InventoryReport({required this.low, required this.out});
+
+  factory _InventoryReport.empty() =>
+      _InventoryReport(low: const [], out: const []);
+}
+
+class _LoyaltyReport {
+  final int earned;
+  final int redeemed;
+  final int refunded;
+  final int net;
+
+  _LoyaltyReport({
+    required this.earned,
+    required this.redeemed,
+    required this.refunded,
+    required this.net,
+  });
+
+  factory _LoyaltyReport.empty() =>
+      _LoyaltyReport(earned: 0, redeemed: 0, refunded: 0, net: 0);
+}
+
+class _DialogRow {
+  final String label;
+  final String value;
+
+  _DialogRow({required this.label, required this.value});
 }
 
 // ==========================================
