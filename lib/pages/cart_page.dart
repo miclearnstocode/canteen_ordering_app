@@ -106,6 +106,7 @@ class _CartPageState extends State<CartPage> {
               'Insufficient credits. You have ₱${currentCredits.toStringAsFixed(2)}, need ₱${total.toStringAsFixed(2)}.');
         }
 
+        // ── Validate menu stock ──
         final menuSnaps = <String, DocumentSnapshot>{};
         for (final item in _state.cartItems) {
           final ref = _firestore.collection('menu_items').doc(item.id);
@@ -121,12 +122,15 @@ class _CartPageState extends State<CartPage> {
           menuSnaps[item.id] = snap;
         }
 
+        // ── Deduct credits ONLY. Points are awarded on completion. ──
         final newBalance = currentCredits - total;
+
         tx.update(userRef, {
           'credits': newBalance,
           'updatedAt': FieldValue.serverTimestamp(),
         });
 
+        // ── Reduce menu stock ──
         for (final item in _state.cartItems) {
           final snap = menuSnaps[item.id]!;
           final stock = (snap.data() as Map)['stock'] as num? ?? 0;
@@ -136,6 +140,7 @@ class _CartPageState extends State<CartPage> {
           });
         }
 
+        // ── Create order ──
         final orderRef = _firestore.collection('orders').doc();
         tx.set(orderRef, {
           'orderNumber': orderRef.id.substring(0, 8).toUpperCase(),
@@ -151,10 +156,14 @@ class _CartPageState extends State<CartPage> {
           'total': total,
           'paymentMethod': 'Credits',
           'status': 'Pending',
+          'pointsEarned': 0,          // filled in when Completed
+          'pointsAwarded': false,     // flag so we never double-award
           'createdAt': FieldValue.serverTimestamp(),
         });
 
-        final txLogRef = _firestore.collection('credit_transactions').doc();
+        // ── Credit transaction log ──
+        final txLogRef =
+            _firestore.collection('credit_transactions').doc();
         tx.set(txLogRef, {
           'uid': uid,
           'type': 'debit',
@@ -191,8 +200,7 @@ class _CartPageState extends State<CartPage> {
     showDialog(
       context: context,
       builder: (context) => Dialog(
-        shape:
-            RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
         child: Padding(
           padding: const EdgeInsets.all(24),
           child: Column(
@@ -217,6 +225,33 @@ class _CartPageState extends State<CartPage> {
                 textAlign: TextAlign.center,
                 style: GoogleFonts.poppins(
                     fontSize: 13, color: Colors.grey.shade600),
+              ),
+              const SizedBox(height: 16),
+              Container(
+                padding: const EdgeInsets.symmetric(
+                    horizontal: 14, vertical: 10),
+                decoration: BoxDecoration(
+                  color: Colors.amber.shade50,
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(color: Colors.amber.shade200),
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(Icons.info_outline,
+                        size: 18, color: Colors.amber.shade800),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        'Loyalty points will be credited once the canteen completes your order.',
+                        style: GoogleFonts.poppins(
+                          fontSize: 11,
+                          color: Colors.amber.shade900,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
               ),
               const SizedBox(height: 20),
               SizedBox(

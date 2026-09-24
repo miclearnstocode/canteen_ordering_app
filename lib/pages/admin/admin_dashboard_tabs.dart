@@ -9,6 +9,8 @@ import '../../services/cloudinary_service.dart';
 import '../../services/inventory_service.dart';
 import '../../models/inventory_item_model.dart';
 import '../../widgets/unit_picker_field.dart';
+import '../../models/loyalty_reward_model.dart';
+
 
 class AdminDashboardPage extends StatelessWidget {
   const AdminDashboardPage({super.key});
@@ -17,135 +19,348 @@ class AdminDashboardPage extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final firestore = FirebaseFirestore.instance;
+
     return Scaffold(
       backgroundColor: const Color(0xFFF8F9FA),
-      body: SingleChildScrollView(
-        padding: const EdgeInsets.all(24),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              'Dashboard Overview',
-              style: GoogleFonts.poppins(fontSize: 24, fontWeight: FontWeight.w700, color: Colors.black87),
-            ),
-            const SizedBox(height: 4),
-            Text(
-              'Real-time canteen performance and metrics',
-              style: GoogleFonts.poppins(fontSize: 13, color: Colors.grey.shade600),
-            ),
-            const SizedBox(height: 20),
+      body: StreamBuilder<QuerySnapshot>(
+        stream: firestore.collection('orders').snapshots(),
+        builder: (context, snapshot) {
+          // ── Parse orders once ──
+          final orders = (snapshot.data?.docs ?? [])
+              .map((d) => d.data() as Map<String, dynamic>)
+              .toList();
 
-            // Responsive Stats Section
-            LayoutBuilder(
-              builder: (context, constraints) {
-                final isWide = constraints.maxWidth >= 750;
-                final double cardWidth = isWide
-                    ? (constraints.maxWidth - 48) / 4
-                    : (constraints.maxWidth - 16) / 2;
+          final now = DateTime.now();
+          final todayStart = DateTime(now.year, now.month, now.day);
 
-                return Wrap(
-                  spacing: 16,
-                  runSpacing: 16,
-                  children: [
-                    SizedBox(
-                      width: cardWidth,
-                      child: _statCard('Today\'s Sales', '₱18,500', Icons.payments, green, '+12% from yesterday'),
-                    ),
-                    SizedBox(
-                      width: cardWidth,
-                      child: _statCard('Orders Today', '235', Icons.receipt_long, const Color(0xFF1976D2), '42 pending'),
-                    ),
-                    SizedBox(
-                      width: cardWidth,
-                      child: _statCard('Pending Orders', '18', Icons.hourglass_top, Colors.orange.shade800, 'Requires action'),
-                    ),
-                    SizedBox(
-                      width: cardWidth,
-                      child: _statCard('Low Stock Items', '6', Icons.warning_amber_rounded, Colors.red.shade700, 'Restock needed'),
-                    ),
-                  ],
-                );
-              },
-            ),
-            const SizedBox(height: 24),
+          double todaySales = 0;
+          int todayOrders = 0;
+          int pendingOrders = 0;
+          double totalEarnings = 0;
+          int completedCount = 0;
 
-            // Sales Chart Container
-            Container(
-              padding: const EdgeInsets.all(24),
-              decoration: BoxDecoration(
-                color: Colors.white,
-                borderRadius: BorderRadius.circular(18),
-                border: Border.all(color: Colors.grey.shade200),
-                boxShadow: [
-                  BoxShadow(
-                    color: Colors.black.withValues(alpha: 0.03),
-                    blurRadius: 10,
-                    offset: const Offset(0, 3),
-                  ),
-                ],
-              ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            'Weekly Sales Overview',
-                            style: GoogleFonts.poppins(fontSize: 16, fontWeight: FontWeight.w700),
+          // Weekly buckets (index 0 = 6 days ago, index 6 = today)
+          final weeklyEarnings = List<double>.filled(7, 0);
+          final weeklyLabels = List<String>.generate(7, (i) {
+            final d = todayStart.subtract(Duration(days: 6 - i));
+            return _shortDayLabel(d);
+          });
+
+          for (final data in orders) {
+            final status =
+                (data['status'] ?? '').toString().toLowerCase();
+            final total = (data['total'] as num?)?.toDouble() ?? 0;
+            final created = (data['createdAt'] as Timestamp?)?.toDate();
+
+            if (created != null &&
+                created.isAfter(todayStart) &&
+                status != 'cancelled') {
+              todayOrders++;
+            }
+
+            if (status == 'pending') pendingOrders++;
+
+            if (status == 'completed') {
+              completedCount++;
+              totalEarnings += total;
+
+              if (created != null && created.isAfter(todayStart)) {
+                todaySales += total;
+              }
+
+              // Weekly bucket
+              if (created != null) {
+                final localCreated = created.toLocal();
+                final orderDay = DateTime(
+                    localCreated.year,
+                    localCreated.month,
+                    localCreated.day);
+                final diff = todayStart.difference(orderDay).inDays;
+                if (diff >= 0 && diff <= 6) {
+                  final bucketIndex = 6 - diff;
+                  weeklyEarnings[bucketIndex] += total;
+                }
+              }
+            }
+          }
+
+          final avgTicket =
+              completedCount > 0 ? totalEarnings / completedCount : 0.0;
+          final weeklyTotal =
+              weeklyEarnings.fold<double>(0, (a, b) => a + b);
+
+          final isLoading =
+              snapshot.connectionState == ConnectionState.waiting;
+
+          return SingleChildScrollView(
+            padding: const EdgeInsets.all(24),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'Dashboard Overview',
+                  style: GoogleFonts.poppins(
+                      fontSize: 24,
+                      fontWeight: FontWeight.w700,
+                      color: Colors.black87),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  'Real-time canteen performance and metrics',
+                  style: GoogleFonts.poppins(
+                      fontSize: 13, color: Colors.grey.shade600),
+                ),
+                const SizedBox(height: 20),
+
+                // ── STAT CARDS ──
+                LayoutBuilder(
+                  builder: (context, constraints) {
+                    final isWide = constraints.maxWidth >= 750;
+                    final double cardWidth = isWide
+                        ? (constraints.maxWidth - 48) / 4
+                        : (constraints.maxWidth - 16) / 2;
+
+                    return Wrap(
+                      spacing: 16,
+                      runSpacing: 16,
+                      children: [
+                        SizedBox(
+                          width: cardWidth,
+                          child: _statCard(
+                            "Today's Sales",
+                            isLoading
+                                ? '…'
+                                : '₱${todaySales.toStringAsFixed(0)}',
+                            Icons.payments,
+                            green,
+                            'From completed orders',
                           ),
-                          Text(
-                            'May 13 - May 19, 2024',
-                            style: GoogleFonts.poppins(fontSize: 12, color: Colors.grey.shade500),
+                        ),
+                        SizedBox(
+                          width: cardWidth,
+                          child: _statCard(
+                            'Orders Today',
+                            isLoading ? '…' : '$todayOrders',
+                            Icons.receipt_long,
+                            const Color(0xFF1976D2),
+                            '$pendingOrders pending',
                           ),
-                        ],
-                      ),
-                      Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                        decoration: BoxDecoration(
-                          color: adminPurple.withValues(alpha: 0.1),
-                          borderRadius: BorderRadius.circular(20),
                         ),
-                        child: Text(
-                          'Total: ₱112,450',
-                          style: GoogleFonts.poppins(fontSize: 12, fontWeight: FontWeight.w600, color: adminPurple),
+                        SizedBox(
+                          width: cardWidth,
+                          child: _statCard(
+                            'Total Earnings',
+                            isLoading
+                                ? '…'
+                                : '₱${totalEarnings.toStringAsFixed(0)}',
+                            Icons.account_balance_wallet,
+                            adminPurple,
+                            '$completedCount completed orders',
+                          ),
                         ),
+                        SizedBox(
+                          width: cardWidth,
+                          child: _statCard(
+                            'Avg. Ticket',
+                            isLoading
+                                ? '…'
+                                : '₱${avgTicket.toStringAsFixed(0)}',
+                            Icons.trending_up,
+                            Colors.orange.shade800,
+                            'Per completed order',
+                          ),
+                        ),
+                      ],
+                    );
+                  },
+                ),
+                const SizedBox(height: 24),
+
+                // ── WEEKLY EARNINGS LINE GRAPH ──
+                Container(
+                  padding: const EdgeInsets.all(24),
+                  decoration: BoxDecoration(
+                    color: Colors.white,
+                    borderRadius: BorderRadius.circular(18),
+                    border: Border.all(color: Colors.grey.shade200),
+                    boxShadow: [
+                      BoxShadow(
+                        color: Colors.black.withValues(alpha: 0.03),
+                        blurRadius: 10,
+                        offset: const Offset(0, 3),
                       ),
                     ],
                   ),
-                  const SizedBox(height: 24),
-                  // Mock Line Chart
-                  SizedBox(
-                    height: 160,
-                    width: double.infinity,
-                    child: CustomPaint(
-                      painter: LineChartPainter(),
-                    ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        mainAxisAlignment:
+                            MainAxisAlignment.spaceBetween,
+                        children: [
+                          Column(
+                            crossAxisAlignment:
+                                CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                'Weekly Earnings',
+                                style: GoogleFonts.poppins(
+                                    fontSize: 16,
+                                    fontWeight: FontWeight.w700),
+                              ),
+                              Text(
+                                'Last 7 days • based on completed orders',
+                                style: GoogleFonts.poppins(
+                                    fontSize: 12,
+                                    color: Colors.grey.shade500),
+                              ),
+                            ],
+                          ),
+                          Container(
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 12, vertical: 6),
+                            decoration: BoxDecoration(
+                              color: adminPurple.withValues(alpha: 0.1),
+                              borderRadius: BorderRadius.circular(20),
+                            ),
+                            child: Text(
+                              'Total: ₱${weeklyTotal.toStringAsFixed(0)}',
+                              style: GoogleFonts.poppins(
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.w600,
+                                  color: adminPurple),
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 24),
+                      SizedBox(
+                        height: 200,
+                        width: double.infinity,
+                        child: EarningsLineChart(
+                          values: weeklyEarnings,
+                          labels: weeklyLabels,
+                          lineColor: adminPurple,
+                        ),
+                      ),
+                      const SizedBox(height: 12),
+                      Row(
+                        mainAxisAlignment:
+                            MainAxisAlignment.spaceBetween,
+                        children: weeklyLabels
+                            .map((label) => Text(
+                                  label,
+                                  style: GoogleFonts.poppins(
+                                    fontSize: 11,
+                                    color: Colors.grey.shade600,
+                                    fontWeight: FontWeight.w500,
+                                  ),
+                                ))
+                            .toList(),
+                      ),
+                    ],
                   ),
-                  const SizedBox(height: 12),
-                  // Day Labels
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
-                        .map((day) => Text(
-                              day,
-                              style: GoogleFonts.poppins(fontSize: 12, color: Colors.grey.shade600, fontWeight: FontWeight.w500),
-                            ))
-                        .toList(),
+                ),
+                const SizedBox(height: 24),
+
+                // ── EARNINGS BREAKDOWN ──
+                Container(
+                  padding: const EdgeInsets.all(24),
+                  decoration: BoxDecoration(
+                    color: Colors.white,
+                    borderRadius: BorderRadius.circular(18),
+                    border: Border.all(color: Colors.grey.shade200),
+                    boxShadow: [
+                      BoxShadow(
+                        color: Colors.black.withValues(alpha: 0.03),
+                        blurRadius: 10,
+                        offset: const Offset(0, 3),
+                      ),
+                    ],
                   ),
-                ],
-              ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        mainAxisAlignment:
+                            MainAxisAlignment.spaceBetween,
+                        children: [
+                          Column(
+                            crossAxisAlignment:
+                                CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                'Earnings Breakdown',
+                                style: GoogleFonts.poppins(
+                                    fontSize: 16,
+                                    fontWeight: FontWeight.w700),
+                              ),
+                              Text(
+                                'Based on completed orders only',
+                                style: GoogleFonts.poppins(
+                                    fontSize: 12,
+                                    color: Colors.grey.shade500),
+                              ),
+                            ],
+                          ),
+                          Container(
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 12, vertical: 6),
+                            decoration: BoxDecoration(
+                              color:
+                                  adminPurple.withValues(alpha: 0.1),
+                              borderRadius: BorderRadius.circular(20),
+                            ),
+                            child: Text(
+                              'Total: ₱${totalEarnings.toStringAsFixed(0)}',
+                              style: GoogleFonts.poppins(
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.w600,
+                                  color: adminPurple),
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 20),
+                      _earningRow(
+                        label: "Today's Earnings",
+                        amount: todaySales,
+                        icon: Icons.today,
+                        color: green,
+                      ),
+                      const SizedBox(height: 12),
+                      _earningRow(
+                        label: 'All-Time Earnings',
+                        amount: totalEarnings,
+                        icon: Icons.history,
+                        color: adminPurple,
+                      ),
+                      const SizedBox(height: 12),
+                      _earningRow(
+                        label: 'Average Order Value',
+                        amount: avgTicket,
+                        icon: Icons.show_chart,
+                        color: Colors.orange.shade800,
+                      ),
+                    ],
+                  ),
+                ),
+              ],
             ),
-          ],
-        ),
+          );
+        },
       ),
     );
   }
 
-  Widget _statCard(String title, String value, IconData icon, Color color, String subtitle) {
+  static String _shortDayLabel(DateTime d) {
+    const days = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+    return days[d.weekday - 1];
+  }
+
+  Widget _statCard(String title, String value, IconData icon, Color color,
+      String subtitle) {
     return Container(
       padding: const EdgeInsets.all(18),
       decoration: BoxDecoration(
@@ -169,7 +384,10 @@ class AdminDashboardPage extends StatelessWidget {
               Flexible(
                 child: Text(
                   title,
-                  style: GoogleFonts.poppins(fontSize: 12, color: Colors.grey.shade600, fontWeight: FontWeight.w500),
+                  style: GoogleFonts.poppins(
+                      fontSize: 12,
+                      color: Colors.grey.shade600,
+                      fontWeight: FontWeight.w500),
                   overflow: TextOverflow.ellipsis,
                 ),
               ),
@@ -186,12 +404,63 @@ class AdminDashboardPage extends StatelessWidget {
           const SizedBox(height: 10),
           Text(
             value,
-            style: GoogleFonts.poppins(fontSize: 24, fontWeight: FontWeight.w800, color: Colors.black87),
+            style: GoogleFonts.poppins(
+                fontSize: 24,
+                fontWeight: FontWeight.w800,
+                color: Colors.black87),
           ),
           const SizedBox(height: 4),
           Text(
             subtitle,
-            style: GoogleFonts.poppins(fontSize: 11, color: color, fontWeight: FontWeight.w500),
+            style: GoogleFonts.poppins(
+                fontSize: 11, color: color, fontWeight: FontWeight.w500),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _earningRow({
+    required String label,
+    required double amount,
+    required IconData icon,
+    required Color color,
+  }) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.06),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: color.withValues(alpha: 0.15)),
+      ),
+      child: Row(
+        children: [
+          Container(
+            padding: const EdgeInsets.all(8),
+            decoration: BoxDecoration(
+              color: color.withValues(alpha: 0.15),
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: Icon(icon, color: color, size: 18),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Text(
+              label,
+              style: GoogleFonts.poppins(
+                fontSize: 13,
+                fontWeight: FontWeight.w600,
+                color: Colors.grey.shade800,
+              ),
+            ),
+          ),
+          Text(
+            '₱${amount.toStringAsFixed(2)}',
+            style: GoogleFonts.poppins(
+              fontSize: 16,
+              fontWeight: FontWeight.w800,
+              color: color,
+            ),
           ),
         ],
       ),
@@ -209,6 +478,7 @@ class AdminOrdersPage extends StatefulWidget {
 
 class _AdminOrdersPageState extends State<AdminOrdersPage> {
   final Color adminPurple = const Color(0xFF5E35B1);
+  final Color green = const Color(0xFF2E7D32);
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
 
   String _selectedTab = 'All';
@@ -225,11 +495,6 @@ class _AdminOrdersPageState extends State<AdminOrdersPage> {
     'Completed',
     'Cancelled',
   ];
-
-  @override
-  void initState() {
-    super.initState();
-  }
 
   Color _statusColor(String status) {
     switch (status.toLowerCase()) {
@@ -248,12 +513,8 @@ class _AdminOrdersPageState extends State<AdminOrdersPage> {
     }
   }
 
-  /// Look up a student's display name by uid. Caches the result.
-  /// Returns null while loading (caller shows a placeholder).
   String? _nameFor(String uid) {
     if (_nameCache.containsKey(uid)) return _nameCache[uid];
-
-    // Kick off a fetch once per uid.
     if (!_loadingNames.contains(uid)) {
       _loadingNames.add(uid);
       _firestore.collection('users').doc(uid).get().then((doc) {
@@ -275,10 +536,161 @@ class _AdminOrdersPageState extends State<AdminOrdersPage> {
         });
       });
     }
-    return null; // still loading
+    return null;
   }
 
-  // ---- Status update with confirmation ----
+  // ─────────────────────────────────────────────
+  // EARNINGS SUMMARY CARD
+  // Computes today's + all-time earnings from COMPLETED orders.
+  // ─────────────────────────────────────────────
+  Widget _buildEarningsSummary(List<_AdminOrder> orders) {
+    final now = DateTime.now();
+    final todayStart = DateTime(now.year, now.month, now.day);
+
+    double todayTotal = 0;
+    int todayCount = 0;
+    double allTimeTotal = 0;
+    int allTimeCount = 0;
+
+    for (final o in orders) {
+      if (o.status.toLowerCase() != 'completed') continue;
+
+      allTimeTotal += o.total;
+      allTimeCount++;
+
+      final created = o.createdAt;
+      if (created != null && created.isAfter(todayStart)) {
+        todayTotal += o.total;
+        todayCount++;
+      }
+    }
+
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final isWide = constraints.maxWidth >= 650;
+        final cardWidth =
+            isWide ? (constraints.maxWidth - 16) / 2 : constraints.maxWidth;
+
+        return Wrap(
+          spacing: 16,
+          runSpacing: 16,
+          children: [
+            SizedBox(
+              width: cardWidth,
+              child: _earningCard(
+                title: "Today's Earnings",
+                amount: todayTotal,
+                orderCount: todayCount,
+                color: green,
+                icon: Icons.today,
+                subtitle: 'From completed orders today',
+              ),
+            ),
+            SizedBox(
+              width: cardWidth,
+              child: _earningCard(
+                title: 'Total Earnings',
+                amount: allTimeTotal,
+                orderCount: allTimeCount,
+                color: adminPurple,
+                icon: Icons.account_balance_wallet,
+                subtitle: 'All-time completed orders',
+              ),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  Widget _earningCard({
+    required String title,
+    required double amount,
+    required int orderCount,
+    required Color color,
+    required IconData icon,
+    required String subtitle,
+  }) {
+    return Container(
+      padding: const EdgeInsets.all(18),
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          colors: [
+            color.withValues(alpha: 0.08),
+            color.withValues(alpha: 0.02),
+          ],
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+        ),
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: color.withValues(alpha: 0.25)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Container(
+                padding: const EdgeInsets.all(8),
+                decoration: BoxDecoration(
+                  color: color.withValues(alpha: 0.15),
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                child: Icon(icon, color: color, size: 20),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      title,
+                      style: GoogleFonts.poppins(
+                        fontSize: 13,
+                        color: Colors.grey.shade700,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                    Text(
+                      subtitle,
+                      style: GoogleFonts.poppins(
+                        fontSize: 10,
+                        color: Colors.grey.shade500,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 14),
+          Text(
+            '₱${amount.toStringAsFixed(2)}',
+            style: GoogleFonts.poppins(
+              fontSize: 26,
+              fontWeight: FontWeight.w800,
+              color: color,
+            ),
+          ),
+          const SizedBox(height: 4),
+          Row(
+            children: [
+              Icon(Icons.receipt_long, size: 14, color: Colors.grey.shade600),
+              const SizedBox(width: 4),
+              Text(
+                '$orderCount completed order${orderCount == 1 ? '' : 's'}',
+                style: GoogleFonts.poppins(
+                  fontSize: 11,
+                  color: Colors.grey.shade600,
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
   Future<void> _updateStatus(
       String orderId, String currentStatus, String newStatus) async {
     if (currentStatus == newStatus) return;
@@ -293,14 +705,60 @@ class _AdminOrdersPageState extends State<AdminOrdersPage> {
       return;
     }
 
+    // ── Show confirmation, with a preview of points to be awarded ──
+    String? bonusMessage;
+    if (newStatus == 'Completed') {
+      final orderSnap =
+          await _firestore.collection('orders').doc(orderId).get();
+      final total =
+          (orderSnap.data()?['total'] as num?)?.toDouble() ?? 0;
+      final pts = (total / 20).floor();
+      bonusMessage =
+          'Student will earn $pts loyalty point${pts == 1 ? '' : 's'}.';
+    }
+
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
         title: Text('Change status?',
             style: GoogleFonts.poppins(fontWeight: FontWeight.bold)),
-        content: Text('Set order to "$newStatus"?',
-            style: GoogleFonts.poppins(fontSize: 13)),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text('Set order to "$newStatus"?',
+                style: GoogleFonts.poppins(fontSize: 13)),
+            if (bonusMessage != null) ...[
+              const SizedBox(height: 10),
+              Container(
+                padding: const EdgeInsets.all(10),
+                decoration: BoxDecoration(
+                  color: Colors.amber.shade50,
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: Colors.amber.shade200),
+                ),
+                child: Row(
+                  children: [
+                    Icon(Icons.stars,
+                        size: 18, color: Colors.amber.shade800),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        bonusMessage,
+                        style: GoogleFonts.poppins(
+                          fontSize: 12,
+                          color: Colors.amber.shade900,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ],
+        ),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(ctx, false),
@@ -322,14 +780,123 @@ class _AdminOrdersPageState extends State<AdminOrdersPage> {
 
     setState(() => _updatingId = orderId);
     try {
-      await _firestore.collection('orders').doc(orderId).update({
-        'status': newStatus,
-        'updatedAt': FieldValue.serverTimestamp(),
+      final orderRef = _firestore.collection('orders').doc(orderId);
+
+      await _firestore.runTransaction((tx) async {
+        final orderSnap = await tx.get(orderRef);
+        if (!orderSnap.exists) {
+          throw Exception('Order no longer exists.');
+        }
+        final orderData = orderSnap.data()!;
+        final total = (orderData['total'] as num?)?.toDouble() ?? 0;
+        final userId = (orderData['userId'] ?? '').toString();
+        final alreadyAwarded = orderData['pointsAwarded'] == true;
+
+        // ── 1. Update the order itself ──
+        final orderUpdate = <String, dynamic>{
+          'status': newStatus,
+          'updatedAt': FieldValue.serverTimestamp(),
+        };
+
+        // ── 2. Award points on the transition INTO Completed ──
+        if (newStatus == 'Completed' &&
+            currentStatus != 'Completed' &&
+            !alreadyAwarded &&
+            userId.isNotEmpty) {
+          final pointsEarned = (total / 20).floor();
+
+          if (pointsEarned > 0) {
+            final userRef = _firestore.collection('users').doc(userId);
+            final userSnap = await tx.get(userRef);
+
+            if (userSnap.exists) {
+              final currentPoints =
+                  (userSnap.data()?['points'] as num?)?.toInt() ?? 0;
+              final newPoints = currentPoints + pointsEarned;
+
+              // Bump user's points
+              tx.update(userRef, {
+                'points': newPoints,
+                'updatedAt': FieldValue.serverTimestamp(),
+              });
+
+              // Log the earn
+              final logRef =
+                  _firestore.collection('points_transactions').doc();
+              tx.set(logRef, {
+                'uid': userId,
+                'type': 'earn',
+                'amount': pointsEarned,
+                'balanceAfter': newPoints,
+                'note':
+                    'Order #${orderData['orderNumber']} completed (₱${total.toStringAsFixed(0)})',
+                'orderId': orderId,
+                'timestamp': FieldValue.serverTimestamp(),
+              });
+
+              // Stamp the order so we never double-award.
+              orderUpdate['pointsEarned'] = pointsEarned;
+              orderUpdate['pointsAwarded'] = true;
+            }
+          } else {
+            // Nothing to award but still mark it processed.
+            orderUpdate['pointsEarned'] = 0;
+            orderUpdate['pointsAwarded'] = true;
+          }
+        }
+
+        // ── 3. If moving OUT of Completed, refund points ──
+        if (currentStatus == 'Completed' &&
+            newStatus != 'Completed' &&
+            alreadyAwarded &&
+            userId.isNotEmpty) {
+          final pointsToRefund =
+              (orderData['pointsEarned'] as num?)?.toInt() ?? 0;
+
+          if (pointsToRefund > 0) {
+            final userRef = _firestore.collection('users').doc(userId);
+            final userSnap = await tx.get(userRef);
+            if (userSnap.exists) {
+              final currentPoints =
+                  (userSnap.data()?['points'] as num?)?.toInt() ?? 0;
+              final newPoints =
+                  (currentPoints - pointsToRefund).clamp(0, 1 << 30);
+
+              tx.update(userRef, {
+                'points': newPoints,
+                'updatedAt': FieldValue.serverTimestamp(),
+              });
+
+              final logRef =
+                  _firestore.collection('points_transactions').doc();
+              tx.set(logRef, {
+                'uid': userId,
+                'type': 'refund',
+                'amount': -pointsToRefund,
+                'balanceAfter': newPoints,
+                'note':
+                    'Order #${orderData['orderNumber']} reopened from Completed',
+                'orderId': orderId,
+                'timestamp': FieldValue.serverTimestamp(),
+              });
+
+              orderUpdate['pointsAwarded'] = false;
+              orderUpdate['pointsEarned'] = 0;
+            }
+          }
+        }
+
+        // ── 4. Write the order update ──
+        tx.update(orderRef, orderUpdate);
       });
+
       if (mounted) {
+        final msg = newStatus == 'Completed'
+            ? 'Order completed — student awarded loyalty points'
+            : 'Order updated to $newStatus';
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('Order updated to $newStatus'),
+            content: Text(msg),
             backgroundColor: _statusColor(newStatus),
           ),
         );
@@ -408,240 +975,300 @@ class _AdminOrdersPageState extends State<AdminOrdersPage> {
       backgroundColor: const Color(0xFFF8F9FA),
       body: Padding(
         padding: const EdgeInsets.all(24),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text('Orders Management',
-                style: GoogleFonts.poppins(
-                    fontSize: 24, fontWeight: FontWeight.w700)),
-            const SizedBox(height: 4),
-            Text(
-              'Live orders from students. Tap a status to update it.',
-              style: GoogleFonts.poppins(
-                  fontSize: 12, color: Colors.grey.shade600),
-            ),
-            const SizedBox(height: 16),
+        child: StreamBuilder<QuerySnapshot>(
+          stream: _firestore.collection('orders').snapshots(),
+          builder: (context, snapshot) {
+            // Parse once — reused for earnings + list.
+            final allOrders = (snapshot.data?.docs ?? [])
+                .map((d) => _AdminOrder.fromDoc(d))
+                .toList();
 
-            // Filter chips
-            SingleChildScrollView(
-              scrollDirection: Axis.horizontal,
-              child: Row(
-                children: ['All', ..._statuses].map((tab) {
-                  final isSelected = _selectedTab == tab;
-                  return Padding(
-                    padding: const EdgeInsets.only(right: 12),
-                    child: ChoiceChip(
-                      label: Text(tab),
-                      selected: isSelected,
-                      selectedColor: adminPurple,
-                      labelStyle: GoogleFonts.poppins(
-                        color: isSelected ? Colors.white : Colors.black87,
-                        fontWeight: isSelected
-                            ? FontWeight.w600
-                            : FontWeight.w400,
-                      ),
-                      onSelected: (selected) {
-                        if (selected) setState(() => _selectedTab = tab);
-                      },
+            final orders = [...allOrders]..sort((a, b) {
+                final aT = a.createdAt ??
+                    DateTime.fromMillisecondsSinceEpoch(0);
+                final bT = b.createdAt ??
+                    DateTime.fromMillisecondsSinceEpoch(0);
+                return bT.compareTo(aT);
+              });
+
+            final filtered = _selectedTab == 'All'
+                ? orders
+                : orders
+                    .where((o) =>
+                        o.status.toLowerCase() ==
+                        _selectedTab.toLowerCase())
+                    .toList();
+
+            return Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text('Orders Management',
+                    style: GoogleFonts.poppins(
+                        fontSize: 24, fontWeight: FontWeight.w700)),
+                const SizedBox(height: 4),
+                Text(
+                  'Monitor live orders and completed earnings.',
+                  style: GoogleFonts.poppins(
+                      fontSize: 12, color: Colors.grey.shade600),
+                ),
+                const SizedBox(height: 16),
+
+                // ── EARNINGS SUMMARY ──
+                if (snapshot.hasData)
+                  _buildEarningsSummary(allOrders),
+                const SizedBox(height: 16),
+
+                // Filter chips
+                SingleChildScrollView(
+                  scrollDirection: Axis.horizontal,
+                  child: Row(
+                    children: ['All', ..._statuses].map((tab) {
+                      final isSelected = _selectedTab == tab;
+                      return Padding(
+                        padding: const EdgeInsets.only(right: 12),
+                        child: ChoiceChip(
+                          label: Text(tab),
+                          selected: isSelected,
+                          selectedColor: adminPurple,
+                          labelStyle: GoogleFonts.poppins(
+                            color: isSelected
+                                ? Colors.white
+                                : Colors.black87,
+                            fontWeight: isSelected
+                                ? FontWeight.w600
+                                : FontWeight.w400,
+                          ),
+                          onSelected: (selected) {
+                            if (selected) {
+                              setState(() => _selectedTab = tab);
+                            }
+                          },
+                        ),
+                      );
+                    }).toList(),
+                  ),
+                ),
+                const SizedBox(height: 16),
+
+                Expanded(
+                  child: Container(
+                    padding: const EdgeInsets.all(16),
+                    decoration: BoxDecoration(
+                      color: Colors.white,
+                      borderRadius: BorderRadius.circular(18),
+                      border: Border.all(color: Colors.grey.shade200),
                     ),
-                  );
-                }).toList(),
-              ),
-            ),
-            const SizedBox(height: 16),
-
-            Expanded(
-              child: Container(
-                padding: const EdgeInsets.all(16),
-                decoration: BoxDecoration(
-                  color: Colors.white,
-                  borderRadius: BorderRadius.circular(18),
-                  border: Border.all(color: Colors.grey.shade200),
+                    child: _buildOrdersList(
+                      snapshot: snapshot,
+                      filtered: filtered,
+                    ),
+                  ),
                 ),
-                child: StreamBuilder<QuerySnapshot>(
-                  stream: _firestore.collection('orders').snapshots(),
-                  builder: (context, snapshot) {
-                    if (snapshot.connectionState == ConnectionState.waiting) {
-                      return const Center(child: CircularProgressIndicator());
-                    }
-                    if (snapshot.hasError) {
-                      return Center(
-                        child: Padding(
-                          padding: const EdgeInsets.all(16),
-                          child: Text(
-                            'Failed to load orders:\n${snapshot.error}',
-                            textAlign: TextAlign.center,
-                            style: GoogleFonts.poppins(
-                                color: Colors.red.shade700, fontSize: 12),
-                          ),
-                        ),
-                      );
-                    }
-
-                    final orders = (snapshot.data?.docs ?? [])
-                        .map((d) => _AdminOrder.fromDoc(d))
-                        .toList()
-                      ..sort((a, b) {
-                        final aT = a.createdAt ??
-                            DateTime.fromMillisecondsSinceEpoch(0);
-                        final bT = b.createdAt ??
-                            DateTime.fromMillisecondsSinceEpoch(0);
-                        return bT.compareTo(aT);
-                      });
-
-                    final filtered = _selectedTab == 'All'
-                        ? orders
-                        : orders
-                            .where((o) =>
-                                o.status.toLowerCase() ==
-                                _selectedTab.toLowerCase())
-                            .toList();
-
-                    if (filtered.isEmpty) {
-                      return Center(
-                        child: Column(
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          children: [
-                            Icon(Icons.receipt_long_outlined,
-                                size: 60, color: Colors.grey.shade400),
-                            const SizedBox(height: 12),
-                            Text('No $_selectedTab orders',
-                                style: GoogleFonts.poppins(
-                                    color: Colors.grey.shade600)),
-                          ],
-                        ),
-                      );
-                    }
-
-                    return ListView.separated(
-                      itemCount: filtered.length,
-                      separatorBuilder: (context, i) =>
-                          Divider(color: Colors.grey.shade100),
-                      itemBuilder: (context, index) {
-                        final order = filtered[index];
-                        final color = _statusColor(order.status);
-                        final isUpdating = _updatingId == order.id;
-
-                        // Resolve buyer name via cache; returns null on
-                        // the first frame while the fetch is in flight.
-                        final cachedName = _nameFor(order.userId);
-
-                        return ListTile(
-                          contentPadding: const EdgeInsets.symmetric(
-                              horizontal: 8, vertical: 6),
-                          leading: Container(
-                            padding: const EdgeInsets.all(10),
-                            decoration: BoxDecoration(
-                              color: color.withValues(alpha: 0.1),
-                              borderRadius: BorderRadius.circular(10),
-                            ),
-                            child: Text(
-                              '#${order.orderNumber}',
-                              style: GoogleFonts.poppins(
-                                  fontWeight: FontWeight.bold,
-                                  fontSize: 12,
-                                  color: color),
-                            ),
-                          ),
-                          title: Row(
-                            children: [
-                              Expanded(
-                                child: Text(
-                                  cachedName ?? 'Loading…',
-                                  style: GoogleFonts.poppins(
-                                      fontWeight: FontWeight.w600,
-                                      fontSize: 14,
-                                      color: cachedName == null
-                                          ? Colors.grey.shade500
-                                          : Colors.black87),
-                                  overflow: TextOverflow.ellipsis,
-                                ),
-                              ),
-                            ],
-                          ),
-                          subtitle: Padding(
-                            padding: const EdgeInsets.only(top: 2),
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Text(
-                                  '${order.formattedDateTime}  •  ${order.itemsSummary}',
-                                  style: GoogleFonts.poppins(
-                                      fontSize: 11,
-                                      color: Colors.grey.shade600),
-                                  maxLines: 2,
-                                  overflow: TextOverflow.ellipsis,
-                                ),
-                                const SizedBox(height: 2),
-                                Text(
-                                  'Payment: ${order.paymentMethod}',
-                                  style: GoogleFonts.poppins(
-                                      fontSize: 11,
-                                      color: Colors.grey.shade500),
-                                ),
-                              ],
-                            ),
-                          ),
-                          trailing: Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              Text(
-                                '₱${order.total.toStringAsFixed(0)}',
-                                style: GoogleFonts.poppins(
-                                    fontWeight: FontWeight.w700, fontSize: 14),
-                              ),
-                              const SizedBox(width: 12),
-                              isUpdating
-                                  ? const SizedBox(
-                                      width: 18,
-                                      height: 18,
-                                      child: CircularProgressIndicator(
-                                          strokeWidth: 2),
-                                    )
-                                  : InkWell(
-                                      onTap: () => _showStatusPicker(
-                                          order.id, order.status),
-                                      borderRadius:
-                                          BorderRadius.circular(8),
-                                      child: Container(
-                                        padding: const EdgeInsets.symmetric(
-                                            horizontal: 10, vertical: 6),
-                                        decoration: BoxDecoration(
-                                          color:
-                                              color.withValues(alpha: 0.15),
-                                          borderRadius:
-                                              BorderRadius.circular(8),
-                                        ),
-                                        child: Row(
-                                          mainAxisSize: MainAxisSize.min,
-                                          children: [
-                                            Text(
-                                              order.status,
-                                              style: GoogleFonts.poppins(
-                                                fontSize: 12,
-                                                color: color,
-                                                fontWeight: FontWeight.w600,
-                                              ),
-                                            ),
-                                            const SizedBox(width: 4),
-                                            Icon(Icons.expand_more,
-                                                size: 16, color: color),
-                                          ],
-                                        ),
-                                      ),
-                                    ),
-                            ],
-                          ),
-                        );
-                      },
-                    );
-                  },
-                ),
-              ),
-            ),
-          ],
+              ],
+            );
+          },
         ),
       ),
+    );
+  }
+
+  Widget _buildOrdersList({
+    required AsyncSnapshot<QuerySnapshot> snapshot,
+    required List<_AdminOrder> filtered,
+  }) {
+    if (snapshot.connectionState == ConnectionState.waiting) {
+      return const Center(child: CircularProgressIndicator());
+    }
+    if (snapshot.hasError) {
+      return Center(
+        child: Padding(
+          padding: const EdgeInsets.all(16),
+          child: Text(
+            'Failed to load orders:\n${snapshot.error}',
+            textAlign: TextAlign.center,
+            style: GoogleFonts.poppins(
+                color: Colors.red.shade700, fontSize: 12),
+          ),
+        ),
+      );
+    }
+
+    if (filtered.isEmpty) {
+      return Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(Icons.receipt_long_outlined,
+                size: 60, color: Colors.grey.shade400),
+            const SizedBox(height: 12),
+            Text('No $_selectedTab orders',
+                style: GoogleFonts.poppins(
+                    color: Colors.grey.shade600)),
+          ],
+        ),
+      );
+    }
+
+    return ListView.separated(
+      itemCount: filtered.length,
+      separatorBuilder: (context, i) =>
+          Divider(color: Colors.grey.shade100),
+      itemBuilder: (context, index) {
+        final order = filtered[index];
+        final color = _statusColor(order.status);
+        final isUpdating = _updatingId == order.id;
+        final cachedName = _nameFor(order.userId);
+        final isCompleted = order.status.toLowerCase() == 'completed';
+
+        return ListTile(
+          contentPadding:
+              const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+          leading: Container(
+            padding: const EdgeInsets.all(10),
+            decoration: BoxDecoration(
+              color: color.withValues(alpha: 0.1),
+              borderRadius: BorderRadius.circular(10),
+            ),
+            child: Text(
+              '#${order.orderNumber}',
+              style: GoogleFonts.poppins(
+                  fontWeight: FontWeight.bold,
+                  fontSize: 12,
+                  color: color),
+            ),
+          ),
+          title: Row(
+            children: [
+              Expanded(
+                child: Text(
+                  cachedName ?? 'Loading…',
+                  style: GoogleFonts.poppins(
+                      fontWeight: FontWeight.w600,
+                      fontSize: 14,
+                      color: cachedName == null
+                          ? Colors.grey.shade500
+                          : Colors.black87),
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+              if (isCompleted)
+                Container(
+                  margin: const EdgeInsets.only(left: 6),
+                  padding: const EdgeInsets.symmetric(
+                      horizontal: 6, vertical: 2),
+                  decoration: BoxDecoration(
+                    color: green.withValues(alpha: 0.12),
+                    borderRadius: BorderRadius.circular(4),
+                  ),
+                  child: Text(
+                    'EARNED',
+                    style: GoogleFonts.poppins(
+                      fontSize: 8,
+                      fontWeight: FontWeight.bold,
+                      color: green,
+                    ),
+                  ),
+                ),
+            ],
+          ),
+          subtitle: Padding(
+            padding: const EdgeInsets.only(top: 2),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  '${order.formattedDateTime}  •  ${order.itemsSummary}',
+                  style: GoogleFonts.poppins(
+                      fontSize: 11, color: Colors.grey.shade600),
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  'Payment: ${order.paymentMethod}',
+                  style: GoogleFonts.poppins(
+                      fontSize: 11, color: Colors.grey.shade500),
+                ),
+              ],
+            ),
+          ),
+          trailing: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(
+                '₱${order.total.toStringAsFixed(0)}',
+                style: GoogleFonts.poppins(
+                    fontWeight: FontWeight.w700,
+                    fontSize: 14,
+                    color: isCompleted ? green : Colors.black87),
+              ),
+              const SizedBox(width: 12),
+              if (isUpdating)
+                const SizedBox(
+                  width: 18,
+                  height: 18,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                )
+              else if (isCompleted)
+                // ── LOCKED: Completed orders can no longer be changed ──
+                Container(
+                  padding: const EdgeInsets.symmetric(
+                      horizontal: 10, vertical: 6),
+                  decoration: BoxDecoration(
+                    color: Colors.grey.shade200,
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(color: Colors.grey.shade300),
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(Icons.lock_outline,
+                          size: 14, color: Colors.grey.shade600),
+                      const SizedBox(width: 4),
+                      Text(
+                        'Completed',
+                        style: GoogleFonts.poppins(
+                          fontSize: 12,
+                          color: Colors.grey.shade600,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ],
+                  ),
+                )
+              else
+                InkWell(
+                  onTap: () =>
+                      _showStatusPicker(order.id, order.status),
+                  borderRadius: BorderRadius.circular(8),
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 10, vertical: 6),
+                    decoration: BoxDecoration(
+                      color: color.withValues(alpha: 0.15),
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Text(
+                          order.status,
+                          style: GoogleFonts.poppins(
+                            fontSize: 12,
+                            color: color,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                        const SizedBox(width: 4),
+                        Icon(Icons.expand_more, size: 16, color: color),
+                      ],
+                    ),
+                  ),
+                ),
+            ],
+          ),
+        );
+      },
     );
   }
 }
@@ -2737,63 +3364,408 @@ class _AdminInventoryPageState extends State<AdminInventoryPage> {
 }
 
 
-// 5. ADMIN LOYALTY REWARDS PAGE
+// 5. ADMIN LOYALTY REWARDS PAGE — dynamic CRUD
 class AdminLoyaltyRewardsPage extends StatefulWidget {
   const AdminLoyaltyRewardsPage({super.key});
 
   @override
-  State<AdminLoyaltyRewardsPage> createState() => _AdminLoyaltyRewardsPageState();
+  State<AdminLoyaltyRewardsPage> createState() =>
+      _AdminLoyaltyRewardsPageState();
 }
 
 class _AdminLoyaltyRewardsPageState extends State<AdminLoyaltyRewardsPage> {
   final Color adminPurple = const Color(0xFF5E35B1);
+  final Color green = const Color(0xFF2E7D32);
+  final CollectionReference _rewardsRef =
+      FirebaseFirestore.instance.collection('loyalty_rewards');
 
-  final List<Map<String, dynamic>> _rewards = [
-    {'name': 'Free Rice', 'points': '20 Points', 'icon': Icons.rice_bowl, 'enabled': true},
-    {'name': 'Free Soft Drink', 'points': '30 Points', 'icon': Icons.local_drink, 'enabled': true},
-    {'name': 'Free Fries', 'points': '40 Points', 'icon': Icons.fastfood, 'enabled': true},
-    {'name': 'Free Burger', 'points': '80 Points', 'icon': Icons.lunch_dining, 'enabled': true},
-  ];
+  // ─────────────────────────────────────────────
+  // ADD / EDIT DIALOG
+  // ─────────────────────────────────────────────
+  void _showRewardDialog({LoyaltyReward? existing}) {
+    final isEdit = existing != null;
+    final nameCtrl = TextEditingController(text: existing?.name ?? '');
+    final pointsCtrl = TextEditingController(
+        text: existing?.points.toString() ?? '20');
+    bool isActive = existing?.isActive ?? true;
+    bool saving = false;
+
+    showDialog(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setD) => AlertDialog(
+          shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(18)),
+          title: Text(
+            isEdit ? 'Edit Reward' : 'Add Reward',
+            style: GoogleFonts.poppins(fontWeight: FontWeight.bold),
+          ),
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                TextField(
+                  controller: nameCtrl,
+                  decoration: InputDecoration(
+                    labelText: 'Reward name',
+                    hintText: 'e.g. Free Rice',
+                    prefixIcon: const Icon(Icons.card_giftcard),
+                    border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(10)),
+                  ),
+                ),
+                const SizedBox(height: 12),
+                TextField(
+                  controller: pointsCtrl,
+                  keyboardType: TextInputType.number,
+                  decoration: InputDecoration(
+                    labelText: 'Points required',
+                    hintText: 'e.g. 20',
+                    prefixIcon: const Icon(Icons.stars),
+                    border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(10)),
+                  ),
+                ),
+                const SizedBox(height: 8),
+                SwitchListTile(
+                  contentPadding: EdgeInsets.zero,
+                  title: Text(
+                    'Available to students',
+                    style: GoogleFonts.poppins(
+                        fontWeight: FontWeight.w500),
+                  ),
+                  value: isActive,
+                  activeThumbColor: adminPurple,
+                  onChanged: (v) => setD(() => isActive = v),
+                ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: saving ? null : () => Navigator.pop(ctx),
+              child: const Text('Cancel'),
+            ),
+            ElevatedButton(
+              onPressed: saving
+                  ? null
+                  : () async {
+                      final name = nameCtrl.text.trim();
+                      final points =
+                          int.tryParse(pointsCtrl.text.trim()) ?? 0;
+                      if (name.isEmpty || points <= 0) {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(
+                            content: Text(
+                                'Enter a valid name and points value.'),
+                            backgroundColor: Colors.red,
+                          ),
+                        );
+                        return;
+                      }
+
+                      setD(() => saving = true);
+                      try {
+                        if (isEdit) {
+                          await _rewardsRef.doc(existing.id).update({
+                            'name': name,
+                            'points': points,
+                            'isActive': isActive,
+                            'updatedAt': FieldValue.serverTimestamp(),
+                          });
+                        } else {
+                          await _rewardsRef.add({
+                            'name': name,
+                            'points': points,
+                            'isActive': isActive,
+                            'updatedAt': FieldValue.serverTimestamp(),
+                            'createdAt': FieldValue.serverTimestamp(),
+                          });
+                        }
+
+                        if (ctx.mounted) Navigator.pop(ctx);
+                        if (mounted) {
+                          ScaffoldMessenger.of(context)
+                              .showSnackBar(SnackBar(
+                            content: Text(isEdit
+                                ? 'Updated "$name"'
+                                : 'Added "$name"'),
+                            backgroundColor: green,
+                          ));
+                        }
+                      } catch (e) {
+                        setD(() => saving = false);
+                        if (ctx.mounted) {
+                          ScaffoldMessenger.of(context)
+                              .showSnackBar(SnackBar(
+                            content: Text('Failed: $e'),
+                            backgroundColor: Colors.red,
+                          ));
+                        }
+                      }
+                    },
+              style: ElevatedButton.styleFrom(
+                backgroundColor: adminPurple,
+                foregroundColor: Colors.white,
+              ),
+              child: saving
+                  ? const SizedBox(
+                      width: 16,
+                      height: 16,
+                      child: CircularProgressIndicator(
+                          color: Colors.white, strokeWidth: 2),
+                    )
+                  : Text(isEdit ? 'Save' : 'Add'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  // ─────────────────────────────────────────────
+  // DELETE WITH CONFIRMATION
+  // ─────────────────────────────────────────────
+  Future<void> _deleteReward(LoyaltyReward r) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        shape:
+            RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: Text('Delete Reward?',
+            style: GoogleFonts.poppins(fontWeight: FontWeight.bold)),
+        content: Text(
+            'Are you sure you want to delete "${r.name}"? This cannot be undone.'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancel'),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: Colors.red.shade600,
+              foregroundColor: Colors.white,
+            ),
+            child: const Text('Delete'),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed == true) {
+      await _rewardsRef.doc(r.id).delete();
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text('Deleted "${r.name}"'),
+          backgroundColor: Colors.red.shade400,
+        ));
+      }
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: const Color(0xFFF8F9FA),
+      floatingActionButton: FloatingActionButton.extended(
+        onPressed: () => _showRewardDialog(),
+        backgroundColor: adminPurple,
+        foregroundColor: Colors.white,
+        icon: const Icon(Icons.add),
+        label: Text('Add Reward',
+            style: GoogleFonts.poppins(fontWeight: FontWeight.w600)),
+      ),
       body: Padding(
         padding: const EdgeInsets.all(24),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text('Loyalty Reward Offerings', style: GoogleFonts.poppins(fontSize: 24, fontWeight: FontWeight.w700)),
+            Text('Loyalty Reward Offerings',
+                style: GoogleFonts.poppins(
+                    fontSize: 24, fontWeight: FontWeight.w700)),
+            const SizedBox(height: 4),
+            Text(
+              'Add, edit, or remove rewards that students can redeem with points.',
+              style: GoogleFonts.poppins(
+                  fontSize: 12, color: Colors.grey.shade600),
+            ),
             const SizedBox(height: 16),
             Expanded(
               child: Container(
-                padding: const EdgeInsets.all(16),
+                padding: const EdgeInsets.all(8),
                 decoration: BoxDecoration(
                   color: Colors.white,
                   borderRadius: BorderRadius.circular(18),
                   border: Border.all(color: Colors.grey.shade200),
                 ),
-                child: ListView.separated(
-                  itemCount: _rewards.length,
-                  separatorBuilder: (context, i) => Divider(color: Colors.grey.shade100),
-                  itemBuilder: (context, index) {
-                    final reward = _rewards[index];
-                    return SwitchListTile(
-                      secondary: Container(
-                        padding: const EdgeInsets.all(8),
-                        decoration: BoxDecoration(
-                          color: adminPurple.withValues(alpha: 0.1),
-                          shape: BoxShape.circle,
+                child: StreamBuilder<QuerySnapshot>(
+                  stream: _rewardsRef.orderBy('points').snapshots(),
+                  builder: (context, snapshot) {
+                    if (snapshot.connectionState ==
+                        ConnectionState.waiting) {
+                      return const Center(
+                          child: CircularProgressIndicator());
+                    }
+                    if (snapshot.hasError) {
+                      return Center(
+                          child: Text('Error: ${snapshot.error}'));
+                    }
+
+                    final rewards = (snapshot.data?.docs ?? [])
+                        .map((d) => LoyaltyReward.fromMap(
+                            d.id, d.data() as Map<String, dynamic>))
+                        .toList();
+
+                    if (rewards.isEmpty) {
+                      return Center(
+                        child: Column(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            Icon(Icons.card_giftcard,
+                                size: 64,
+                                color: Colors.grey.shade400),
+                            const SizedBox(height: 12),
+                            Text('No rewards yet',
+                                style: GoogleFonts.poppins(
+                                    color: Colors.grey.shade600)),
+                            const SizedBox(height: 4),
+                            Text('Tap "Add Reward" to create one.',
+                                style: GoogleFonts.poppins(
+                                    fontSize: 12,
+                                    color: Colors.grey.shade500)),
+                          ],
                         ),
-                        child: Icon(reward['icon'] as IconData, color: adminPurple),
-                      ),
-                      title: Text(reward['name'] as String, style: GoogleFonts.poppins(fontWeight: FontWeight.w600)),
-                      subtitle: Text(reward['points'] as String, style: GoogleFonts.poppins(color: Colors.grey.shade600)),
-                      value: reward['enabled'] as bool,
-                      activeThumbColor: adminPurple,
-                      onChanged: (val) {
-                        setState(() => _rewards[index]['enabled'] = val);
+                      );
+                    }
+
+                    return ListView.separated(
+                      itemCount: rewards.length,
+                      separatorBuilder: (_, __) =>
+                          Divider(color: Colors.grey.shade100),
+                      itemBuilder: (context, index) {
+                        final r = rewards[index];
+                        return ListTile(
+                          contentPadding: const EdgeInsets.symmetric(
+                              horizontal: 8, vertical: 4),
+                          onTap: () => _showRewardDialog(existing: r),
+                          leading: Container(
+                            padding: const EdgeInsets.all(10),
+                            decoration: BoxDecoration(
+                              color: adminPurple
+                                  .withValues(alpha: 0.1),
+                              shape: BoxShape.circle,
+                            ),
+                            child: Icon(
+                              Icons.card_giftcard,
+                              color: adminPurple,
+                            ),
+                          ),
+                          title: Row(
+                            children: [
+                              Expanded(
+                                child: Text(r.name,
+                                    style: GoogleFonts.poppins(
+                                        fontWeight: FontWeight.w600,
+                                        fontSize: 14),
+                                    overflow: TextOverflow.ellipsis),
+                              ),
+                              Container(
+                                margin:
+                                    const EdgeInsets.only(left: 8),
+                                padding: const EdgeInsets.symmetric(
+                                    horizontal: 8, vertical: 2),
+                                decoration: BoxDecoration(
+                                  color: r.isActive
+                                      ? Colors.green.shade50
+                                      : Colors.grey.shade200,
+                                  borderRadius:
+                                      BorderRadius.circular(6),
+                                ),
+                                child: Text(
+                                  r.isActive ? 'ACTIVE' : 'HIDDEN',
+                                  style: GoogleFonts.poppins(
+                                    fontSize: 9,
+                                    fontWeight: FontWeight.bold,
+                                    color: r.isActive
+                                        ? Colors.green.shade700
+                                        : Colors.grey.shade700,
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                          subtitle: Padding(
+                            padding: const EdgeInsets.only(top: 2),
+                            child: Text(
+                              '${r.points} Points',
+                              style: GoogleFonts.poppins(
+                                  fontSize: 12,
+                                  color: Colors.grey.shade600),
+                            ),
+                          ),
+                          trailing: PopupMenuButton<String>(
+                            icon: const Icon(Icons.more_vert, size: 20),
+                            shape: RoundedRectangleBorder(
+                                borderRadius:
+                                    BorderRadius.circular(12)),
+                            onSelected: (v) {
+                              if (v == 'edit') {
+                                _showRewardDialog(existing: r);
+                              } else if (v == 'toggle') {
+                                _rewardsRef.doc(r.id).update({
+                                  'isActive': !r.isActive,
+                                  'updatedAt':
+                                      FieldValue.serverTimestamp(),
+                                });
+                              } else if (v == 'delete') {
+                                _deleteReward(r);
+                              }
+                            },
+                            itemBuilder: (_) => [
+                              const PopupMenuItem(
+                                value: 'edit',
+                                child: Row(
+                                  children: [
+                                    Icon(Icons.edit, size: 18),
+                                    SizedBox(width: 8),
+                                    Text('Edit'),
+                                  ],
+                                ),
+                              ),
+                              PopupMenuItem(
+                                value: 'toggle',
+                                child: Row(
+                                  children: [
+                                    Icon(
+                                      r.isActive
+                                          ? Icons.visibility_off
+                                          : Icons.visibility,
+                                      size: 18,
+                                    ),
+                                    const SizedBox(width: 8),
+                                    Text(r.isActive
+                                        ? 'Hide from students'
+                                        : 'Show to students'),
+                                  ],
+                                ),
+                              ),
+                              const PopupMenuItem(
+                                value: 'delete',
+                                child: Row(
+                                  children: [
+                                    Icon(Icons.delete,
+                                        size: 18, color: Colors.red),
+                                    SizedBox(width: 8),
+                                    Text('Delete',
+                                        style:
+                                            TextStyle(color: Colors.red)),
+                                  ],
+                                ),
+                              ),
+                            ],
+                          ),
+                        );
                       },
                     );
                   },
@@ -2807,54 +3779,189 @@ class _AdminLoyaltyRewardsPageState extends State<AdminLoyaltyRewardsPage> {
   }
 }
 
-// Line Chart Painter
-class LineChartPainter extends CustomPainter {
+class EarningsLineChart extends StatelessWidget {
+  const EarningsLineChart({
+    super.key,
+    required this.values,
+    required this.labels,
+    required this.lineColor,
+  });
+
+  final List<double> values;
+  final List<String> labels;
+  final Color lineColor;
+
+  @override
+  Widget build(BuildContext context) {
+    return CustomPaint(
+      painter: _EarningsChartPainter(
+        values: values,
+        labels: labels,
+        lineColor: lineColor,
+        gridColor: Colors.grey.shade200,
+        textStyle: GoogleFonts.poppins(
+          fontSize: 10,
+          color: Colors.grey.shade600,
+        ),
+      ),
+      size: Size.infinite,
+    );
+  }
+}
+
+class _EarningsChartPainter extends CustomPainter {
+  _EarningsChartPainter({
+    required this.values,
+    required this.labels,
+    required this.lineColor,
+    required this.gridColor,
+    required this.textStyle,
+  });
+
+  final List<double> values;
+  final List<String> labels;
+  final Color lineColor;
+  final Color gridColor;
+  final TextStyle textStyle;
+
+  static const double _leftPad = 44;
+  static const double _rightPad = 12;
+  static const double _topPad = 16;
+  static const double _bottomPad = 12;
+
   @override
   void paint(Canvas canvas, Size size) {
+    if (values.isEmpty) return;
+
+    final chartWidth = size.width - _leftPad - _rightPad;
+    final chartHeight = size.height - _topPad - _bottomPad;
+
+    final maxValue = values.reduce((a, b) => a > b ? a : b);
+    // Round up to a "nice" ceiling so the top label is clean.
+    final niceMax = _niceCeiling(maxValue);
+    // If all values are 0, still draw a flat line at the bottom.
+    final safeMax = niceMax == 0 ? 1.0 : niceMax;
+
+    // ── Y-axis grid + labels ──
     final gridPaint = Paint()
-      ..color = Colors.grey.shade200
+      ..color = gridColor
       ..strokeWidth = 1;
 
-    for (int i = 1; i <= 4; i++) {
-      final y = size.height * (i / 4);
-      canvas.drawLine(Offset(0, y), Offset(size.width, y), gridPaint);
+    const int gridLines = 4;
+    for (int i = 0; i <= gridLines; i++) {
+      final y = _topPad + chartHeight * (i / gridLines);
+      canvas.drawLine(
+        Offset(_leftPad, y),
+        Offset(size.width - _rightPad, y),
+        gridPaint,
+      );
+
+      final value = safeMax * (1 - i / gridLines);
+      final tp = TextPainter(
+        text: TextSpan(
+          text: _formatAxisLabel(value),
+          style: textStyle,
+        ),
+        textDirection: TextDirection.ltr,
+      )..layout();
+      tp.paint(
+        canvas,
+        Offset(_leftPad - tp.width - 6, y - tp.height / 2),
+      );
     }
 
-    final paint = Paint()
-      ..color = const Color(0xFF5E35B1)
+    // ── Compute point positions ──
+    final points = <Offset>[];
+    for (int i = 0; i < values.length; i++) {
+      final x = values.length == 1
+          ? _leftPad + chartWidth / 2
+          : _leftPad + chartWidth * (i / (values.length - 1));
+      final y = _topPad +
+          chartHeight * (1 - (values[i] / safeMax).clamp(0.0, 1.0));
+      points.add(Offset(x, y));
+    }
+
+    // ── Area fill under the line ──
+    final areaPath = Path()
+      ..moveTo(points.first.dx, _topPad + chartHeight)
+      ..lineTo(points.first.dx, points.first.dy);
+    for (int i = 1; i < points.length; i++) {
+      areaPath.lineTo(points[i].dx, points[i].dy);
+    }
+    areaPath
+      ..lineTo(points.last.dx, _topPad + chartHeight)
+      ..close();
+
+    final areaPaint = Paint()
+      ..shader = LinearGradient(
+        begin: Alignment.topCenter,
+        end: Alignment.bottomCenter,
+        colors: [
+          lineColor.withValues(alpha: 0.25),
+          lineColor.withValues(alpha: 0.02),
+        ],
+      ).createShader(Rect.fromLTWH(
+        _leftPad,
+        _topPad,
+        chartWidth,
+        chartHeight,
+      ));
+    canvas.drawPath(areaPath, areaPaint);
+
+    // ── The line itself ──
+    final linePaint = Paint()
+      ..color = lineColor
       ..strokeWidth = 3
       ..style = PaintingStyle.stroke
-      ..strokeCap = StrokeCap.round;
+      ..strokeCap = StrokeCap.round
+      ..strokeJoin = StrokeJoin.round;
 
-    final path = Path()
-      ..moveTo(0, size.height * 0.75)
-      ..lineTo(size.width * 0.16, size.height * 0.55)
-      ..lineTo(size.width * 0.33, size.height * 0.65)
-      ..lineTo(size.width * 0.50, size.height * 0.35)
-      ..lineTo(size.width * 0.66, size.height * 0.45)
-      ..lineTo(size.width * 0.83, size.height * 0.20)
-      ..lineTo(size.width, size.height * 0.15);
+    final linePath = Path()..moveTo(points.first.dx, points.first.dy);
+    for (int i = 1; i < points.length; i++) {
+      linePath.lineTo(points[i].dx, points[i].dy);
+    }
+    canvas.drawPath(linePath, linePaint);
 
-    canvas.drawPath(path, paint);
-
-    final dotPaint = Paint()..color = const Color(0xFF5E35B1);
-    final dotWhite = Paint()..color = Colors.white;
-    final points = [
-      Offset(0, size.height * 0.75),
-      Offset(size.width * 0.16, size.height * 0.55),
-      Offset(size.width * 0.33, size.height * 0.65),
-      Offset(size.width * 0.50, size.height * 0.35),
-      Offset(size.width * 0.66, size.height * 0.45),
-      Offset(size.width * 0.83, size.height * 0.20),
-      Offset(size.width, size.height * 0.15),
-    ];
+    // ── Data point dots ──
+    final dotFill = Paint()..color = Colors.white;
+    final dotStroke = Paint()
+      ..color = lineColor
+      ..strokeWidth = 2.5
+      ..style = PaintingStyle.stroke;
 
     for (final p in points) {
-      canvas.drawCircle(p, 5, dotPaint);
-      canvas.drawCircle(p, 2.5, dotWhite);
+      canvas.drawCircle(p, 5, dotFill);
+      canvas.drawCircle(p, 5, dotStroke);
     }
   }
 
   @override
-  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
+  bool shouldRepaint(covariant _EarningsChartPainter old) {
+    return old.values != values ||
+        old.labels != labels ||
+        old.lineColor != lineColor;
+  }
+
+  /// Round up to a friendly number for the Y-axis ceiling.
+  static double _niceCeiling(double v) {
+    if (v <= 0) return 0;
+    if (v <= 10) return 10;
+    if (v <= 50) return 50;
+    if (v <= 100) return 100;
+    if (v <= 250) return 250;
+    if (v <= 500) return 500;
+    if (v <= 1000) return 1000;
+    if (v <= 2500) return 2500;
+    if (v <= 5000) return 5000;
+    // Round up to the next 1000 for larger values.
+    return (v / 1000).ceil() * 1000.0;
+  }
+
+  static String _formatAxisLabel(double v) {
+    if (v >= 1000) {
+      final k = v / 1000;
+      return '₱${k.toStringAsFixed(k % 1 == 0 ? 0 : 1)}k';
+    }
+    return '₱${v.toStringAsFixed(0)}';
+  }
 }

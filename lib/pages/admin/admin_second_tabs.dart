@@ -1,3 +1,4 @@
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import '../../models/user_model.dart';
@@ -209,7 +210,7 @@ class _AdminRedemptionPageState extends State<AdminRedemptionPage> {
 }
 
 // ==========================================
-// 7. ADMIN PAYMENTS PAGE
+// 7. ADMIN PAYMENTS PAGE (LIVE)
 // ==========================================
 class AdminPaymentsPage extends StatefulWidget {
   const AdminPaymentsPage({super.key});
@@ -221,31 +222,58 @@ class AdminPaymentsPage extends StatefulWidget {
 class _AdminPaymentsPageState extends State<AdminPaymentsPage> {
   final Color adminPurple = const Color(0xFF5E35B1);
   final Color green = const Color(0xFF2E7D32);
-  String _selectedFilter = 'All';
+  final Color debitColor = const Color(0xFFC62828);
+  final FirebaseFirestore _firestore = FirebaseFirestore.instance;
 
-  final List<Map<String, dynamic>> _payments = [
-    {'id': '#10025', 'time': '10:30 AM', 'name': 'Marianne Santos', 'method': 'Cash', 'amount': '₱315', 'status': 'Paid'},
-    {'id': '#10026', 'time': '10:32 AM', 'name': 'John Dela Cruz', 'method': 'GCash', 'amount': '₱190', 'status': 'Verify'},
-    {'id': '#10027', 'time': '10:34 AM', 'name': 'Andrea Reyes', 'method': 'Cash', 'amount': '₱120', 'status': 'Paid'},
-    {'id': '#10028', 'time': '10:40 AM', 'name': 'Mark Garcia', 'method': 'GCash', 'amount': '₱250', 'status': 'Verify'},
-    {'id': '#10029', 'time': '10:45 AM', 'name': 'Kyle Villanueva', 'method': 'Cash', 'amount': '₱85', 'status': 'Paid'},
-  ];
+  /// 'all' | 'credit' | 'debit'
+  String _selectedFilter = 'all';
 
-  void _verifyPayment(int index) {
-    setState(() {
-      _payments[index]['status'] = 'Paid';
-    });
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text('Payment ${_payments[index]['id']} verified!'), backgroundColor: green),
-    );
+  // Cache: uid -> display name. Fetched lazily.
+  final Map<String, String> _nameCache = {};
+  final Set<String> _loadingNames = {};
+
+  String? _nameFor(String uid) {
+    if (uid.isEmpty) return 'Unknown';
+    if (_nameCache.containsKey(uid)) return _nameCache[uid];
+    if (!_loadingNames.contains(uid)) {
+      _loadingNames.add(uid);
+      _firestore.collection('users').doc(uid).get().then((doc) {
+        final data = doc.data();
+        final name = (data?['displayName'] ??
+                data?['username'] ??
+                'Unknown Student')
+            .toString();
+        if (!mounted) return;
+        setState(() {
+          _nameCache[uid] = name;
+          _loadingNames.remove(uid);
+        });
+      }).catchError((_) {
+        if (!mounted) return;
+        setState(() {
+          _nameCache[uid] = 'Unknown Student';
+          _loadingNames.remove(uid);
+        });
+      });
+    }
+    return null;
+  }
+
+  String _formatDateTime(DateTime? dt) {
+    if (dt == null) return '—';
+    final local = dt.toLocal();
+    final months = [
+      'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+      'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec',
+    ];
+    final h12 = local.hour % 12 == 0 ? 12 : local.hour % 12;
+    final ampm = local.hour >= 12 ? 'PM' : 'AM';
+    final min = local.minute.toString().padLeft(2, '0');
+    return '${months[local.month - 1]} ${local.day}, $h12:$min $ampm';
   }
 
   @override
   Widget build(BuildContext context) {
-    final filtered = _selectedFilter == 'All'
-        ? _payments
-        : _payments.where((p) => (p['method'] as String).toLowerCase() == _selectedFilter.toLowerCase()).toList();
-
     return Scaffold(
       backgroundColor: const Color(0xFFF8F9FA),
       body: Padding(
@@ -253,95 +281,386 @@ class _AdminPaymentsPageState extends State<AdminPaymentsPage> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text('Payments & Transactions', style: GoogleFonts.poppins(fontSize: 24, fontWeight: FontWeight.w700)),
-            const SizedBox(height: 16),
-            // Filter Chips
-            Row(
-              children: ['All', 'Cash', 'GCash'].map((filter) {
-                final isSelected = _selectedFilter == filter;
-                return Padding(
-                  padding: const EdgeInsets.only(right: 12),
-                  child: ChoiceChip(
-                    label: Text(filter),
-                    selected: isSelected,
-                    selectedColor: adminPurple,
-                    labelStyle: GoogleFonts.poppins(
-                      color: isSelected ? Colors.white : Colors.black87,
-                      fontWeight: isSelected ? FontWeight.w600 : FontWeight.w400,
-                    ),
-                    onSelected: (selected) {
-                      if (selected) setState(() => _selectedFilter = filter);
-                    },
-                  ),
-                );
-              }).toList(),
+            Text('Payments & Transactions',
+                style: GoogleFonts.poppins(
+                    fontSize: 24, fontWeight: FontWeight.w700)),
+            const SizedBox(height: 4),
+            Text(
+              'Live credit top-ups and order payments from students.',
+              style: GoogleFonts.poppins(
+                  fontSize: 12, color: Colors.grey.shade600),
             ),
             const SizedBox(height: 16),
-            Expanded(
-              child: Container(
-                padding: const EdgeInsets.all(16),
-                decoration: BoxDecoration(
-                  color: Colors.white,
-                  borderRadius: BorderRadius.circular(18),
-                  border: Border.all(color: Colors.grey.shade200),
-                ),
-                child: ListView.separated(
-                  itemCount: filtered.length,
-                  separatorBuilder: (context, i) => Divider(color: Colors.grey.shade100),
-                  itemBuilder: (context, index) {
-                    final item = filtered[index];
-                    final isVerify = item['status'] == 'Verify';
 
-                    return ListTile(
-                      leading: Container(
-                        padding: const EdgeInsets.all(10),
-                        decoration: BoxDecoration(
-                          color: (item['method'] == 'GCash' ? const Color(0xFF007DFE) : green).withValues(alpha: 0.1),
-                          borderRadius: BorderRadius.circular(10),
+            // ── Filter chips ──
+            Row(
+              children: [
+                _buildFilterChip('all', 'All'),
+                const SizedBox(width: 8),
+                _buildFilterChip('credit', 'Top-ups'),
+                const SizedBox(width: 8),
+                _buildFilterChip('debit', 'Order Payments'),
+              ],
+            ),
+            const SizedBox(height: 16),
+
+            Expanded(
+              child: StreamBuilder<QuerySnapshot>(
+                // No orderBy → no index needed; we sort client-side.
+                stream: _firestore
+                    .collection('credit_transactions')
+                    .limit(200)
+                    .snapshots(),
+                builder: (context, snapshot) {
+                  if (snapshot.connectionState ==
+                      ConnectionState.waiting) {
+                    return const Center(
+                        child: CircularProgressIndicator());
+                  }
+                  if (snapshot.hasError) {
+                    return Center(
+                      child: Padding(
+                        padding: const EdgeInsets.all(16),
+                        child: Text(
+                          'Failed to load payments:\n${snapshot.error}',
+                          textAlign: TextAlign.center,
+                          style: GoogleFonts.poppins(
+                              color: Colors.red.shade700,
+                              fontSize: 12),
                         ),
-                        child: Icon(
-                          item['method'] == 'GCash' ? Icons.account_balance_wallet : Icons.money,
-                          color: item['method'] == 'GCash' ? const Color(0xFF007DFE) : green,
-                          size: 20,
-                        ),
-                      ),
-                      title: Text('${item['name']} (${item['id']})', style: GoogleFonts.poppins(fontWeight: FontWeight.w600, fontSize: 13)),
-                      subtitle: Text('${item['time']} • Method: ${item['method']}', style: GoogleFonts.poppins(fontSize: 12, color: Colors.grey.shade600)),
-                      trailing: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Text(item['amount'] as String, style: GoogleFonts.poppins(fontWeight: FontWeight.w700, fontSize: 15)),
-                          const SizedBox(width: 12),
-                          if (isVerify)
-                            ElevatedButton(
-                              onPressed: () => _verifyPayment(_payments.indexOf(item)),
-                              style: ElevatedButton.styleFrom(
-                                backgroundColor: adminPurple,
-                                foregroundColor: Colors.white,
-                                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
-                                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-                              ),
-                              child: const Text('Verify', style: TextStyle(fontSize: 12)),
-                            )
-                          else
-                            Container(
-                              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-                              decoration: BoxDecoration(
-                                color: green.withValues(alpha: 0.1),
-                                borderRadius: BorderRadius.circular(8),
-                              ),
-                              child: Text('Paid', style: GoogleFonts.poppins(fontSize: 12, color: green, fontWeight: FontWeight.bold)),
-                            ),
-                        ],
                       ),
                     );
-                  },
-                ),
+                  }
+
+                  // ── Parse and sort newest first ──
+                  final allTx = (snapshot.data?.docs ?? [])
+                      .map((d) => _CreditTx.fromDoc(d))
+                      .toList()
+                    ..sort((a, b) {
+                      final aT = a.timestamp ??
+                          DateTime.fromMillisecondsSinceEpoch(0);
+                      final bT = b.timestamp ??
+                          DateTime.fromMillisecondsSinceEpoch(0);
+                      return bT.compareTo(aT);
+                    });
+
+                  // ── Apply filter ──
+                  final filtered = _selectedFilter == 'all'
+                      ? allTx
+                      : allTx
+                          .where((t) => t.type == _selectedFilter)
+                          .toList();
+
+                  // ── Aggregate totals for the header strip ──
+                  double totalTopUps = 0;
+                  double totalSpent = 0;
+                  for (final t in allTx) {
+                    if (t.type == 'credit') totalTopUps += t.amount;
+                    if (t.type == 'debit') totalSpent += t.amount;
+                  }
+
+                  return Column(
+                    children: [
+                      // ── Summary strip ──
+                      LayoutBuilder(
+                        builder: (context, constraints) {
+                          final wide = constraints.maxWidth >= 600;
+                          final w = wide
+                              ? (constraints.maxWidth - 16) / 2
+                              : constraints.maxWidth;
+                          return Wrap(
+                            spacing: 16,
+                            runSpacing: 12,
+                            children: [
+                              SizedBox(
+                                width: w,
+                                child: _summaryCard(
+                                  label: 'Total Top-ups Received',
+                                  amount: totalTopUps,
+                                  icon: Icons.south_west,
+                                  color: green,
+                                ),
+                              ),
+                              SizedBox(
+                                width: w,
+                                child: _summaryCard(
+                                  label: 'Total Spent on Orders',
+                                  amount: totalSpent,
+                                  icon: Icons.north_east,
+                                  color: debitColor,
+                                ),
+                              ),
+                            ],
+                          );
+                        },
+                      ),
+                      const SizedBox(height: 16),
+
+                      // ── Transactions list ──
+                      Expanded(
+                        child: Container(
+                          padding: const EdgeInsets.all(8),
+                          decoration: BoxDecoration(
+                            color: Colors.white,
+                            borderRadius: BorderRadius.circular(18),
+                            border: Border.all(color: Colors.grey.shade200),
+                          ),
+                          child: filtered.isEmpty
+                              ? Center(
+                                  child: Column(
+                                    mainAxisAlignment:
+                                        MainAxisAlignment.center,
+                                    children: [
+                                      Icon(Icons.receipt_long_outlined,
+                                          size: 60,
+                                          color: Colors.grey.shade400),
+                                      const SizedBox(height: 12),
+                                      Text(
+                                        'No transactions yet',
+                                        style: GoogleFonts.poppins(
+                                            color: Colors.grey.shade600),
+                                      ),
+                                    ],
+                                  ),
+                                )
+                              : ListView.separated(
+                                  itemCount: filtered.length,
+                                  separatorBuilder: (_, __) => Divider(
+                                      color: Colors.grey.shade100),
+                                  itemBuilder: (context, i) {
+                                    final tx = filtered[i];
+                                    final isCredit = tx.type == 'credit';
+                                    final color =
+                                        isCredit ? green : debitColor;
+                                    final icon = isCredit
+                                        ? Icons.add_card
+                                        : Icons.shopping_bag_outlined;
+                                    final label = isCredit
+                                        ? 'Credit Top-up'
+                                        : 'Order Payment';
+                                    final sign = isCredit ? '+' : '-';
+                                    final cachedName = _nameFor(tx.uid);
+
+                                    return ListTile(
+                                      contentPadding:
+                                          const EdgeInsets.symmetric(
+                                              horizontal: 12,
+                                              vertical: 6),
+                                      leading: Container(
+                                        padding:
+                                            const EdgeInsets.all(10),
+                                        decoration: BoxDecoration(
+                                          color: color.withValues(
+                                              alpha: 0.1),
+                                          borderRadius:
+                                              BorderRadius.circular(10),
+                                        ),
+                                        child: Icon(icon,
+                                            color: color, size: 20),
+                                      ),
+                                      title: Row(
+                                        children: [
+                                          Expanded(
+                                            child: Text(
+                                              cachedName ??
+                                                  'Loading…',
+                                              style: GoogleFonts.poppins(
+                                                fontWeight: FontWeight.w600,
+                                                fontSize: 14,
+                                                color: cachedName == null
+                                                    ? Colors.grey.shade500
+                                                    : Colors.black87,
+                                              ),
+                                              overflow:
+                                                  TextOverflow.ellipsis,
+                                            ),
+                                          ),
+                                          Container(
+                                            padding: const EdgeInsets
+                                                .symmetric(
+                                                horizontal: 8,
+                                                vertical: 2),
+                                            decoration: BoxDecoration(
+                                              color: color.withValues(
+                                                  alpha: 0.12),
+                                              borderRadius:
+                                                  BorderRadius.circular(
+                                                      6),
+                                            ),
+                                            child: Text(
+                                              label,
+                                              style: GoogleFonts.poppins(
+                                                fontSize: 10,
+                                                fontWeight:
+                                                    FontWeight.bold,
+                                                color: color,
+                                              ),
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                      subtitle: Padding(
+                                        padding:
+                                            const EdgeInsets.only(top: 2),
+                                        child: Column(
+                                          crossAxisAlignment:
+                                              CrossAxisAlignment.start,
+                                          children: [
+                                            Text(
+                                              tx.note.isEmpty
+                                                  ? _formatDateTime(
+                                                      tx.timestamp)
+                                                  : '${tx.note}  •  ${_formatDateTime(tx.timestamp)}',
+                                              style: GoogleFonts.poppins(
+                                                  fontSize: 11,
+                                                  color: Colors
+                                                      .grey.shade600),
+                                              maxLines: 2,
+                                              overflow:
+                                                  TextOverflow.ellipsis,
+                                            ),
+                                            const SizedBox(height: 2),
+                                            Text(
+                                              'Balance after: ₱${tx.balanceAfter.toStringAsFixed(2)}',
+                                              style: GoogleFonts.poppins(
+                                                  fontSize: 11,
+                                                  color: Colors
+                                                      .grey.shade500),
+                                            ),
+                                          ],
+                                        ),
+                                      ),
+                                      trailing: Text(
+                                        '$sign₱${tx.amount.toStringAsFixed(2)}',
+                                        style: GoogleFonts.poppins(
+                                          fontWeight: FontWeight.w700,
+                                          fontSize: 15,
+                                          color: color,
+                                        ),
+                                      ),
+                                    );
+                                  },
+                                ),
+                        ),
+                      ),
+                    ],
+                  );
+                },
               ),
             ),
           ],
         ),
       ),
+    );
+  }
+
+  Widget _buildFilterChip(String value, String label) {
+    final selected = _selectedFilter == value;
+    return ChoiceChip(
+      label: Text(label),
+      selected: selected,
+      selectedColor: adminPurple,
+      labelStyle: GoogleFonts.poppins(
+        color: selected ? Colors.white : Colors.black87,
+        fontWeight: selected ? FontWeight.w600 : FontWeight.w400,
+      ),
+      onSelected: (s) {
+        if (s) setState(() => _selectedFilter = value);
+      },
+    );
+  }
+
+  Widget _summaryCard({
+    required String label,
+    required double amount,
+    required IconData icon,
+    required Color color,
+  }) {
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          colors: [
+            color.withValues(alpha: 0.08),
+            color.withValues(alpha: 0.02),
+          ],
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+        ),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: color.withValues(alpha: 0.25)),
+      ),
+      child: Row(
+        children: [
+          Container(
+            padding: const EdgeInsets.all(8),
+            decoration: BoxDecoration(
+              color: color.withValues(alpha: 0.15),
+              borderRadius: BorderRadius.circular(10),
+            ),
+            child: Icon(icon, color: color, size: 20),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  label,
+                  style: GoogleFonts.poppins(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w600,
+                    color: Colors.grey.shade700,
+                  ),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  '₱${amount.toStringAsFixed(2)}',
+                  style: GoogleFonts.poppins(
+                    fontSize: 20,
+                    fontWeight: FontWeight.w800,
+                    color: color,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+// ---------- Internal model ----------
+class _CreditTx {
+  final String id;
+  final String uid;
+  final String type; // 'credit' | 'debit'
+  final double amount;
+  final double balanceAfter;
+  final String note;
+  final DateTime? timestamp;
+
+  _CreditTx({
+    required this.id,
+    required this.uid,
+    required this.type,
+    required this.amount,
+    required this.balanceAfter,
+    required this.note,
+    required this.timestamp,
+  });
+
+  factory _CreditTx.fromDoc(DocumentSnapshot doc) {
+    final d = doc.data() as Map<String, dynamic>;
+    return _CreditTx(
+      id: doc.id,
+      uid: (d['uid'] ?? '').toString(),
+      type: (d['type'] ?? 'credit').toString(),
+      amount: (d['amount'] as num?)?.toDouble() ?? 0.0,
+      balanceAfter: (d['balanceAfter'] as num?)?.toDouble() ?? 0.0,
+      note: (d['note'] ?? '').toString(),
+      timestamp: (d['timestamp'] as Timestamp?)?.toDate(),
     );
   }
 }
