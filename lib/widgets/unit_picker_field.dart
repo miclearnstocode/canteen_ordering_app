@@ -95,7 +95,7 @@ class _UnitPickerFieldState extends State<UnitPickerField> {
     final sorted = items.toList()..sort();
 
     return DropdownButtonFormField<String>(
-      value: sorted.contains(widget.value) ? widget.value : null,
+      initialValue: sorted.contains(widget.value) ? widget.value : null,
       isExpanded: true,
       decoration: InputDecoration(
         labelText: widget.label,

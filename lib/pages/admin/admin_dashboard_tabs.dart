@@ -724,17 +724,16 @@ class _AdminMenuManagementPageState extends State<AdminMenuManagementPage> {
   final CollectionReference _menuCollection =
       FirebaseFirestore.instance.collection('menu_items');
 
-  // ADD ITEM — also auto-creates missing ingredients
   Future<void> _addItem(MenuItemModel item, XFile? imageFile) async {
     String? imageUrl;
 
     if (imageFile != null) {
-      imageUrl = await CloudinaryService.uploadImage(imageFile,
-          folder: 'menu_items');
+      imageUrl = await CloudinaryService.uploadImage(
+        imageFile,
+        folder: 'menu_items',
+      );
     }
 
-    // Make sure every ingredient in the recipe exists in `inventory`.
-    // Missing ones get auto-created with stock 0.
     final resolvedRecipe =
         await InventoryService.ensureIngredientsExist(item.recipe);
 
@@ -744,21 +743,40 @@ class _AdminMenuManagementPageState extends State<AdminMenuManagementPage> {
     );
 
     await _menuCollection.add(itemWithImage.toMap());
+
+    // Old recipe is empty → every ingredient is newly consumed.
+    await InventoryService.applyRecipeStockDelta(
+      oldRecipe: const [],
+      newRecipe: resolvedRecipe,
+    );
   }
 
-  // ─────────────────────────────────────────────
-  // UPDATE ITEM — re-syncs recipe to inventory
-  // ─────────────────────────────────────────────
   Future<void> _updateItem(
-      String id, MenuItemModel updatedItem, XFile? imageFile) async {
-    String? imageUrl = updatedItem.imageUrl;
+    String id,
+    MenuItemModel updatedItem,
+    XFile? imageFile,
+  ) async {
+    // ── 1. Fetch the true OLD recipe from Firestore.
+    final existingSnap = await _menuCollection.doc(id).get();
+    if (!existingSnap.exists) {
+      throw Exception('Menu item no longer exists.');
+    }
+    final existingItem = MenuItemModel.fromMap(
+      id,
+      existingSnap.data() as Map<String, dynamic>,
+    );
+    final oldRecipe = existingItem.recipe;
 
+    // ── 2. Upload new image if provided.
+    String? imageUrl = updatedItem.imageUrl;
     if (imageFile != null) {
-      imageUrl = await CloudinaryService.uploadImage(imageFile,
-          folder: 'menu_items');
+      imageUrl = await CloudinaryService.uploadImage(
+        imageFile,
+        folder: 'menu_items',
+      );
     }
 
-    // Ensure any newly-added ingredient rows exist in inventory.
+    // ── 3. Ensure every ingredient has a valid inventory doc.
     final resolvedRecipe =
         await InventoryService.ensureIngredientsExist(updatedItem.recipe);
 
@@ -767,15 +785,24 @@ class _AdminMenuManagementPageState extends State<AdminMenuManagementPage> {
       recipe: resolvedRecipe,
     );
 
+    // ── 4. Save the menu item.
     await _menuCollection.doc(id).update(itemWithImage.toMap());
+
+    // ── 5. Apply the stock delta.
+    debugPrint('=== MENU EDIT: RECIPE DELTA ===');
+    debugPrint(
+        'old: ${oldRecipe.map((r) => "${r.ingredientName}=${r.qtyPerPortion}${r.unit}").toList()}');
+    debugPrint(
+        'new: ${resolvedRecipe.map((r) => "${r.ingredientName}=${r.qtyPerPortion}${r.unit}").toList()}');
+
+    await InventoryService.applyRecipeStockDelta(
+      oldRecipe: oldRecipe,
+      newRecipe: resolvedRecipe,
+    );
   }
 
-  // ─────────────────────────────────────────────
-  // DELETE ITEM
-  // ─────────────────────────────────────────────
   Future<void> _deleteItem(String id, String? imageUrl) async {
     await _menuCollection.doc(id).delete();
-    // Optional: also delete unused inventory entries here.
   }
 
   @override
@@ -1047,9 +1074,6 @@ class _AdminMenuManagementPageState extends State<AdminMenuManagementPage> {
     );
   }
 
-  // ─────────────────────────────────────────────
-  // EMPTY STATE
-  // ─────────────────────────────────────────────
   Widget _buildEmptyState() {
     return Center(
       child: Column(
@@ -1084,10 +1108,6 @@ class _AdminMenuManagementPageState extends State<AdminMenuManagementPage> {
     );
   }
 
-  // ─────────────────────────────────────────────
-  // INGREDIENT PICKER (shared by Add + Edit dialogs)
-  // Returns {ingredientId, ingredientName, unit, qtyPerPortion}
-  // ─────────────────────────────────────────────
   Future<Map<String, dynamic>?> _pickIngredient(
       BuildContext context) async {
     final snap = await FirebaseFirestore.instance
@@ -1096,7 +1116,8 @@ class _AdminMenuManagementPageState extends State<AdminMenuManagementPage> {
         .get();
     final items = snap.docs
         .map((d) => InventoryItemModel.fromMap(
-            d.id, d.data() as Map<String, dynamic>))
+            d.id, d.data()))
+        .where((i) => i.isIngredient)
         .toList();
 
     if (!context.mounted) return null;
@@ -1104,10 +1125,12 @@ class _AdminMenuManagementPageState extends State<AdminMenuManagementPage> {
     return showDialog<Map<String, dynamic>>(
       context: context,
       builder: (ctx) {
-        String q = '';
+        String q = ''; // lowercase search query
+        String rawName = ''; // original-case name
         String unit = 'pcs';
         final qtyCtrl = TextEditingController(text: '1');
         InventoryItemModel? selected;
+        bool creating = false;
 
         return StatefulBuilder(
           builder: (ctx, setD) => AlertDialog(
@@ -1126,8 +1149,14 @@ class _AdminMenuManagementPageState extends State<AdminMenuManagementPage> {
                       hintText: 'Search or type new name...',
                       prefixIcon: Icon(Icons.search),
                     ),
-                    onChanged: (v) =>
-                        setD(() => q = v.trim().toLowerCase()),
+                    onChanged: (v) {
+                      setD(() {
+                        rawName = v.trim();
+                        q = rawName.toLowerCase();
+                        // Clear selection when user edits text
+                        selected = null;
+                      });
+                    },
                   ),
                   const SizedBox(height: 8),
                   if (items.isNotEmpty)
@@ -1150,14 +1179,16 @@ class _AdminMenuManagementPageState extends State<AdminMenuManagementPage> {
                                       ? const Icon(Icons.check,
                                           color: Color(0xFF5E35B1))
                                       : null,
-                                  onTap: () =>
-                                      setD(() => selected = i),
+                                  onTap: () => setD(() {
+                                    selected = i;
+                                    unit = i.unit;
+                                  }),
                                 ))
                             .toList(),
                       ),
                     ),
                   const SizedBox(height: 8),
-                  if (selected == null && q.isNotEmpty)
+                  if (selected == null && rawName.isNotEmpty)
                     Container(
                       width: double.infinity,
                       padding: const EdgeInsets.all(10),
@@ -1168,7 +1199,7 @@ class _AdminMenuManagementPageState extends State<AdminMenuManagementPage> {
                             color: Colors.amber.shade200),
                       ),
                       child: Text(
-                        'New ingredient "$q" will be created in inventory with 0 stock.',
+                        'New ingredient "$rawName" will be created in inventory with 0 stock.',
                         style: GoogleFonts.poppins(
                             fontSize: 11,
                             color: Colors.amber.shade900),
@@ -1200,35 +1231,82 @@ class _AdminMenuManagementPageState extends State<AdminMenuManagementPage> {
             ),
             actions: [
               TextButton(
-                onPressed: () => Navigator.pop(ctx),
+                onPressed: creating
+                    ? null
+                    : () => Navigator.pop(ctx),
                 child: const Text('Cancel'),
               ),
               ElevatedButton(
-                onPressed: () {
-                  final qty = double.tryParse(qtyCtrl.text) ?? 1;
-                  if (qty <= 0) return;
+                onPressed: creating
+                    ? null
+                    : () async {
+                        final qty = double.tryParse(qtyCtrl.text) ?? 1;
+                        if (qty <= 0) return;
 
-                  if (selected != null) {
-                    Navigator.pop(ctx, {
-                      'ingredientId': selected!.id,
-                      'ingredientName': selected!.name,
-                      'unit': selected!.unit,
-                      'qtyPerPortion': qty,
-                    });
-                  } else if (q.isNotEmpty) {
-                    Navigator.pop(ctx, {
-                      'ingredientId': '',
-                      'ingredientName': q,
-                      'unit': unit,
-                      'qtyPerPortion': qty,
-                    });
-                  }
-                },
+                        // Existing ingredient picked
+                        if (selected != null) {
+                          Navigator.pop(ctx, {
+                            'ingredientId': selected!.id,
+                            'ingredientName': selected!.name,
+                            'unit': selected!.unit,
+                            'qtyPerPortion': qty,
+                          });
+                          return;
+                        }
+
+                        if (rawName.isEmpty) return;
+
+                        // Create new ingredient in inventory NOW so
+                        // the recipe row gets a real id immediately.
+                        setD(() => creating = true);
+                        try {
+                          final newDoc = await FirebaseFirestore
+                              .instance
+                              .collection('inventory')
+                              .add({
+                            'name': rawName,
+                            'unit': unit,
+                            'stock': 0,
+                            'minLevel': 5,
+                            'type': 'ingredient',
+                            'updatedAt':
+                                FieldValue.serverTimestamp(),
+                          });
+
+                          if (ctx.mounted) {
+                            Navigator.pop(ctx, {
+                              'ingredientId': newDoc.id,
+                              'ingredientName': rawName,
+                              'unit': unit,
+                              'qtyPerPortion': qty,
+                            });
+                          }
+                        } catch (e) {
+                          setD(() => creating = false);
+                          if (ctx.mounted) {
+                            ScaffoldMessenger.of(context)
+                                .showSnackBar(SnackBar(
+                              content: Text(
+                                  'Failed to create ingredient: $e'),
+                              backgroundColor: Colors.red,
+                            ));
+                          }
+                        }
+                      },
                 style: ElevatedButton.styleFrom(
                   backgroundColor: adminPurple,
                   foregroundColor: Colors.white,
                 ),
-                child: const Text('Add'),
+                child: creating
+                    ? const SizedBox(
+                        width: 16,
+                        height: 16,
+                        child: CircularProgressIndicator(
+                          color: Colors.white,
+                          strokeWidth: 2,
+                        ),
+                      )
+                    : const Text('Add'),
               ),
             ],
           ),
@@ -1237,9 +1315,7 @@ class _AdminMenuManagementPageState extends State<AdminMenuManagementPage> {
     );
   }
 
-  // ─────────────────────────────────────────────
-  // SHARED RECIPE EDITOR UI
-  // ─────────────────────────────────────────────
+
   Widget _buildRecipeSection({
     required BuildContext ctx,
     required List<Map<String, dynamic>> rows,
@@ -1314,9 +1390,87 @@ class _AdminMenuManagementPageState extends State<AdminMenuManagementPage> {
                         ],
                       ),
                     ),
+                    // ── EDIT qty / unit ──
+                    IconButton(
+                      icon: const Icon(Icons.edit,
+                          size: 18, color: Color(0xFF5E35B1)),
+                      tooltip: 'Edit qty / unit',
+                      onPressed: () async {
+                        final qtyCtrl = TextEditingController(
+                            text: (r['qtyPerPortion'] as num)
+                                .toString());
+                        String localUnit = r['unit'];
+
+                        final ok = await showDialog<bool>(
+                          context: ctx,
+                          builder: (dCtx) => StatefulBuilder(
+                            builder: (dCtx, setD) => AlertDialog(
+                              shape: RoundedRectangleBorder(
+                                  borderRadius:
+                                      BorderRadius.circular(16)),
+                              title: Text(
+                                  'Edit ${r['ingredientName']}',
+                                  style: GoogleFonts.poppins(
+                                      fontWeight:
+                                          FontWeight.bold)),
+                              content: Column(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  TextField(
+                                    controller: qtyCtrl,
+                                    keyboardType:
+                                        TextInputType.number,
+                                    decoration:
+                                        const InputDecoration(
+                                            labelText:
+                                                'Qty per portion'),
+                                  ),
+                                  const SizedBox(height: 8),
+                                  UnitPickerField(
+                                    value: localUnit,
+                                    onChanged: (v) =>
+                                        setD(() => localUnit = v),
+                                  ),
+                                ],
+                              ),
+                              actions: [
+                                TextButton(
+                                  onPressed: () =>
+                                      Navigator.pop(dCtx, false),
+                                  child: const Text('Cancel'),
+                                ),
+                                ElevatedButton(
+                                  onPressed: () =>
+                                      Navigator.pop(dCtx, true),
+                                  style: ElevatedButton.styleFrom(
+                                    backgroundColor:
+                                        const Color(0xFF5E35B1),
+                                    foregroundColor: Colors.white,
+                                  ),
+                                  child: const Text('Save'),
+                                ),
+                              ],
+                            ),
+                          ),
+                        );
+
+                        if (ok == true) {
+                          final newQty =
+                              double.tryParse(qtyCtrl.text) ?? 0;
+                          if (newQty > 0) {
+                            setModalState(() {
+                              r['qtyPerPortion'] = newQty;
+                              r['unit'] = localUnit;
+                            });
+                          }
+                        }
+                      },
+                    ),
+                    // ── REMOVE row ──
                     IconButton(
                       icon: const Icon(Icons.close,
                           size: 18, color: Colors.red),
+                      tooltip: 'Remove from recipe',
                       onPressed: () =>
                           setModalState(() => rows.removeAt(i)),
                     ),
@@ -1329,9 +1483,6 @@ class _AdminMenuManagementPageState extends State<AdminMenuManagementPage> {
     );
   }
 
-  // ─────────────────────────────────────────────
-  // ADD ITEM DIALOG
-  // ─────────────────────────────────────────────
   void _showAddItemDialog(BuildContext outerCtx) {
     final nameController = TextEditingController();
     final priceController = TextEditingController();
@@ -1519,6 +1670,12 @@ class _AdminMenuManagementPageState extends State<AdminMenuManagementPage> {
                               : () async {
                                   if (nameController.text.isEmpty ||
                                       priceController.text.isEmpty) {
+                                    ScaffoldMessenger.of(context)
+                                        .showSnackBar(const SnackBar(
+                                      content: Text(
+                                          'Name and price are required.'),
+                                      backgroundColor: Colors.red,
+                                    ));
                                     return;
                                   }
                                   setModalState(
@@ -1625,9 +1782,7 @@ class _AdminMenuManagementPageState extends State<AdminMenuManagementPage> {
     );
   }
 
-  // ─────────────────────────────────────────────
-  // EDIT ITEM DIALOG
-  // ─────────────────────────────────────────────
+
   void _showEditItemDialog(BuildContext outerCtx, MenuItemModel item) {
     final nameController = TextEditingController(text: item.name);
     final priceController =
@@ -1867,8 +2022,7 @@ class _AdminMenuManagementPageState extends State<AdminMenuManagementPage> {
                                       recipe: recipe,
                                     );
 
-                                    await _updateItem(item.id,
-                                        updatedItem, selectedImage);
+                                    await _updateItem( item.id,  updatedItem,  selectedImage,);
                                     if (context.mounted) {
                                       Navigator.pop(context);
                                       ScaffoldMessenger.of(context)
@@ -1939,9 +2093,6 @@ class _AdminMenuManagementPageState extends State<AdminMenuManagementPage> {
     );
   }
 
-  // ─────────────────────────────────────────────
-  // SHARED IMAGE PICKER WIDGET (used by Add + Edit)
-  // ─────────────────────────────────────────────
   Widget _buildImagePicker({
     required BuildContext context,
     required XFile? selectedImage,
@@ -2080,7 +2231,6 @@ class _AdminMenuManagementPageState extends State<AdminMenuManagementPage> {
     );
   }
 }
-
 
 // 4. ADMIN INVENTORY PAGE
 class AdminInventoryPage extends StatefulWidget {
