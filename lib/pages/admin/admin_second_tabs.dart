@@ -823,7 +823,7 @@ class _AdminReportsPageState extends State<AdminReportsPage> {
           revenue: monthlyTotal,
           avgTicket:
               monthlyOrders > 0 ? monthlyTotal / monthlyOrders : 0,
-          monthLabel: _monthName(now.month) + ' ' + now.year.toString(),
+          monthLabel: '${_monthName(now.month)} ${now.year}',
         );
         _topItems = top.take(5).toList();
         _inventory = _InventoryReport(low: low, out: out);

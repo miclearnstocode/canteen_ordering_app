@@ -12,7 +12,7 @@ class RewardsPage extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final primaryColor = const Color(0xFF1E7B3B);
+    const primaryColor = Color(0xFF1E7B3B);
     final firestore = FirebaseFirestore.instance;
 
     return Scaffold(
@@ -90,7 +90,7 @@ class RewardsPage extends StatelessWidget {
                               const SizedBox(height: 6),
                               Row(
                                 children: [
-                                  Icon(Icons.star_rounded,
+                                  const Icon(Icons.star_rounded,
                                       color: primaryColor, size: 28),
                                   const SizedBox(width: 6),
                                   Text.rich(
@@ -204,7 +204,7 @@ class RewardsPage extends StatelessWidget {
     LoyaltyReward reward, {
     required int currentPoints,
   }) {
-    final primaryColor = const Color(0xFF1E7B3B);
+    const primaryColor = Color(0xFF1E7B3B);
     final bool canRedeem = currentPoints >= reward.points;
     final icon = _iconFor(reward.name);
 
@@ -304,7 +304,7 @@ class RewardsPage extends StatelessWidget {
     LoyaltyReward reward,
     bool canRedeem,
   ) async {
-    final primaryColor = const Color(0xFF1E7B3B);
+    const primaryColor = Color(0xFF1E7B3B);
     if (!canRedeem) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
@@ -368,7 +368,7 @@ class RewardsPage extends StatelessWidget {
   }
 
   void _showRedeemSuccess(BuildContext context, LoyaltyReward reward) {
-    final primaryColor = const Color(0xFF1E7B3B);
+    const primaryColor = Color(0xFF1E7B3B);
     showDialog(
       context: context,
       builder: (context) => Dialog(
@@ -382,7 +382,7 @@ class RewardsPage extends StatelessWidget {
               Container(
                 width: 56,
                 height: 56,
-                decoration: BoxDecoration(
+                decoration: const BoxDecoration(
                   color: primaryColor,
                   shape: BoxShape.circle,
                 ),
