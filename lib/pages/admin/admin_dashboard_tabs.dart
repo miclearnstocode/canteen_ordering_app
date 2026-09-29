@@ -10,7 +10,8 @@ import '../../services/inventory_service.dart';
 import '../../models/inventory_item_model.dart';
 import '../../widgets/unit_picker_field.dart';
 import '../../models/loyalty_reward_model.dart';
-
+import 'dart:math';
+import 'package:mobile_scanner/mobile_scanner.dart';
 
 class AdminDashboardPage extends StatelessWidget {
   const AdminDashboardPage({super.key});
@@ -468,7 +469,7 @@ class AdminDashboardPage extends StatelessWidget {
   }
 }
 
-// 2. ADMIN ORDERS PAGE 
+// 2. ADMIN ORDERS PAGE
 class AdminOrdersPage extends StatefulWidget {
   const AdminOrdersPage({super.key});
 
@@ -519,10 +520,9 @@ class _AdminOrdersPageState extends State<AdminOrdersPage> {
       _loadingNames.add(uid);
       _firestore.collection('users').doc(uid).get().then((doc) {
         final data = doc.data();
-        final name = (data?['displayName'] ??
-                data?['username'] ??
-                'Unknown Student')
-            .toString();
+        final name =
+            (data?['displayName'] ?? data?['username'] ?? 'Unknown Student')
+                .toString();
         if (!mounted) return;
         setState(() {
           _nameCache[uid] = name;
@@ -540,8 +540,142 @@ class _AdminOrdersPageState extends State<AdminOrdersPage> {
   }
 
   // ─────────────────────────────────────────────
+  // PICKUP TOKEN (generated on → Ready)
+  // ─────────────────────────────────────────────
+  // Avoids 0/O/1/I so it stays readable if typed manually.
+  String _generatePickupToken() {
+    const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+    final rand = Random.secure();
+    return List.generate(24, (_) => chars[rand.nextInt(chars.length)]).join();
+  }
+
+  // ─────────────────────────────────────────────
+  // QR SCANNER
+  // ─────────────────────────────────────────────
+  Future<void> _openScanner({String? expectedOrderId}) async {
+    final result = await Navigator.of(context).push<String>(
+      MaterialPageRoute(builder: (_) => const _QrScannerScreen()),
+    );
+    if (result == null || !mounted) return;
+    await _processScannedPayload(result, expectedOrderId: expectedOrderId);
+  }
+
+  Future<void> _processScannedPayload(
+    String raw, {
+    String? expectedOrderId,
+  }) async {
+    const prefix = 'CANTEEN_PICKUP:';
+    if (!raw.startsWith(prefix)) {
+      _scannerFeedback('Not a Canteen Click pickup QR.', isError: true);
+      return;
+    }
+
+    final rest = raw.substring(prefix.length);
+    final parts = rest.split(':');
+    if (parts.length != 2) {
+      _scannerFeedback('Malformed QR code.', isError: true);
+      return;
+    }
+    final orderId = parts[0];
+    final token = parts[1];
+
+    // If we launched the scanner from a specific order, enforce it.
+    if (expectedOrderId != null && orderId != expectedOrderId) {
+      _scannerFeedback(
+        'This QR belongs to a different order. Please scan the correct one.',
+        isError: true,
+      );
+      return;
+    }
+
+    final snap = await _firestore.collection('orders').doc(orderId).get();
+    if (!snap.exists) {
+      _scannerFeedback('Order not found.', isError: true);
+      return;
+    }
+    final data = snap.data()!;
+    final status = (data['status'] ?? '').toString();
+    final storedToken = (data['pickupToken'] ?? '').toString();
+
+    if (status.toLowerCase() != 'ready') {
+      _scannerFeedback(
+        'Order is not Ready yet (currently $status).',
+        isError: true,
+      );
+      return;
+    }
+    if (storedToken.isEmpty || storedToken != token) {
+      _scannerFeedback('Invalid or expired QR.', isError: true);
+      return;
+    }
+
+    final orderNumber =
+        (data['orderNumber'] ?? orderId.substring(0, 8))
+            .toString()
+            .toUpperCase();
+
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        shape:
+            RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: Text('Complete order?',
+            style: GoogleFonts.poppins(fontWeight: FontWeight.bold)),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              'Order #$orderNumber',
+              style: GoogleFonts.poppins(fontWeight: FontWeight.w700),
+            ),
+            const SizedBox(height: 6),
+            Text(
+              'Mark this order as Completed and award loyalty points to the student?',
+              style: GoogleFonts.poppins(fontSize: 12),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancel'),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: adminPurple,
+              foregroundColor: Colors.white,
+            ),
+            child: const Text('Complete'),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed != true) return;
+
+    // Only now — after a valid QR + explicit confirmation — do we write.
+    await _updateStatus(
+      orderId,
+      'Ready',
+      'Completed',
+      allowCompletion: true,
+    );
+  }
+
+  void _scannerFeedback(String msg, {bool isError = false}) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(msg),
+        backgroundColor: isError ? Colors.red.shade600 : green,
+      ),
+    );
+  }
+
+  // ─────────────────────────────────────────────
   // EARNINGS SUMMARY CARD
-  // Computes today's + all-time earnings from COMPLETED orders.
   // ─────────────────────────────────────────────
   Widget _buildEarningsSummary(List<_AdminOrder> orders) {
     final now = DateTime.now();
@@ -691,8 +825,15 @@ class _AdminOrdersPageState extends State<AdminOrdersPage> {
     );
   }
 
+  // ─────────────────────────────────────────────
+  // UPDATE STATUS
+  // ─────────────────────────────────────────────
   Future<void> _updateStatus(
-      String orderId, String currentStatus, String newStatus) async {
+    String orderId,
+    String currentStatus,
+    String newStatus, {
+    bool allowCompletion = false,
+  }) async {
     if (currentStatus == newStatus) return;
 
     if (currentStatus == 'Completed') {
@@ -705,13 +846,18 @@ class _AdminOrdersPageState extends State<AdminOrdersPage> {
       return;
     }
 
+    // ── Guard: any non-QR attempt to complete → route to the scanner ──
+    if (newStatus == 'Completed' && !allowCompletion) {
+      await _openScanner(expectedOrderId: orderId);
+      return;
+    }
+
     // ── Show confirmation, with a preview of points to be awarded ──
     String? bonusMessage;
     if (newStatus == 'Completed') {
       final orderSnap =
           await _firestore.collection('orders').doc(orderId).get();
-      final total =
-          (orderSnap.data()?['total'] as num?)?.toDouble() ?? 0;
+      final total = (orderSnap.data()?['total'] as num?)?.toDouble() ?? 0;
       final pts = (total / 20).floor();
       bonusMessage =
           'Student will earn $pts loyalty point${pts == 1 ? '' : 's'}.';
@@ -740,8 +886,7 @@ class _AdminOrdersPageState extends State<AdminOrdersPage> {
                 ),
                 child: Row(
                   children: [
-                    Icon(Icons.stars,
-                        size: 18, color: Colors.amber.shade800),
+                    Icon(Icons.stars, size: 18, color: Colors.amber.shade800),
                     const SizedBox(width: 8),
                     Expanded(
                       child: Text(
@@ -792,11 +937,28 @@ class _AdminOrdersPageState extends State<AdminOrdersPage> {
         final userId = (orderData['userId'] ?? '').toString();
         final alreadyAwarded = orderData['pointsAwarded'] == true;
 
-        // ── 1. Update the order itself ──
+        // ── 1. Base update ──
         final orderUpdate = <String, dynamic>{
           'status': newStatus,
           'updatedAt': FieldValue.serverTimestamp(),
         };
+
+        // ── 1a. Generate a pickup token when moving INTO Ready ──
+        if (newStatus == 'Ready' && currentStatus != 'Ready') {
+          orderUpdate['pickupToken'] = _generatePickupToken();
+          orderUpdate['readyAt'] = FieldValue.serverTimestamp();
+        }
+
+        // ── 1b. Clear the token when leaving Ready ──
+        if (currentStatus == 'Ready' && newStatus != 'Ready') {
+          orderUpdate['pickupToken'] = FieldValue.delete();
+        }
+
+        // ── 1c. Stamp completion time + clear token on Completed ──
+        if (newStatus == 'Completed') {
+          orderUpdate['completedAt'] = FieldValue.serverTimestamp();
+          orderUpdate['pickupToken'] = FieldValue.delete();
+        }
 
         // ── 2. Award points on the transition INTO Completed ──
         if (newStatus == 'Completed' &&
@@ -814,13 +976,11 @@ class _AdminOrdersPageState extends State<AdminOrdersPage> {
                   (userSnap.data()?['points'] as num?)?.toInt() ?? 0;
               final newPoints = currentPoints + pointsEarned;
 
-              // Bump user's points
               tx.update(userRef, {
                 'points': newPoints,
                 'updatedAt': FieldValue.serverTimestamp(),
               });
 
-              // Log the earn
               final logRef =
                   _firestore.collection('points_transactions').doc();
               tx.set(logRef, {
@@ -834,12 +994,10 @@ class _AdminOrdersPageState extends State<AdminOrdersPage> {
                 'timestamp': FieldValue.serverTimestamp(),
               });
 
-              // Stamp the order so we never double-award.
               orderUpdate['pointsEarned'] = pointsEarned;
               orderUpdate['pointsAwarded'] = true;
             }
           } else {
-            // Nothing to award but still mark it processed.
             orderUpdate['pointsEarned'] = 0;
             orderUpdate['pointsAwarded'] = true;
           }
@@ -893,7 +1051,9 @@ class _AdminOrdersPageState extends State<AdminOrdersPage> {
       if (mounted) {
         final msg = newStatus == 'Completed'
             ? 'Order completed — student awarded loyalty points'
-            : 'Order updated to $newStatus';
+            : newStatus == 'Ready'
+                ? 'Order is Ready — student can now show their pickup QR'
+                : 'Order updated to $newStatus';
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text(msg),
@@ -912,8 +1072,13 @@ class _AdminOrdersPageState extends State<AdminOrdersPage> {
     }
   }
 
+  // ─────────────────────────────────────────────
+  // STATUS PICKER
+  // ─────────────────────────────────────────────
   Future<void> _showStatusPicker(
-      String orderId, String currentStatus) async {
+    String orderId,
+    String currentStatus,
+  ) async {
     final picked = await showModalBottomSheet<String>(
       context: context,
       shape: const RoundedRectangleBorder(
@@ -937,9 +1102,12 @@ class _AdminOrdersPageState extends State<AdminOrdersPage> {
                 style: GoogleFonts.poppins(
                     fontSize: 16, fontWeight: FontWeight.w700)),
             const SizedBox(height: 8),
+
             ..._statuses.map((s) {
               final isCurrent = s == currentStatus;
+              final isCompleted = s == 'Completed';
               final color = _statusColor(s);
+
               return ListTile(
                 leading: Icon(
                   isCurrent
@@ -947,14 +1115,54 @@ class _AdminOrdersPageState extends State<AdminOrdersPage> {
                       : Icons.radio_button_unchecked,
                   color: color,
                 ),
-                title: Text(
-                  s,
-                  style: GoogleFonts.poppins(
-                    fontWeight:
-                        isCurrent ? FontWeight.w700 : FontWeight.w500,
-                    color: color,
-                  ),
+                title: Row(
+                  children: [
+                    Text(
+                      s,
+                      style: GoogleFonts.poppins(
+                        fontWeight:
+                            isCurrent ? FontWeight.w700 : FontWeight.w500,
+                        color: color,
+                      ),
+                    ),
+                    if (isCompleted) ...[
+                      const SizedBox(width: 8),
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 6, vertical: 2),
+                        decoration: BoxDecoration(
+                          color: green.withValues(alpha: 0.12),
+                          borderRadius: BorderRadius.circular(4),
+                        ),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(Icons.qr_code_scanner,
+                                size: 10, color: green),
+                            const SizedBox(width: 3),
+                            Text(
+                              'REQUIRES QR',
+                              style: GoogleFonts.poppins(
+                                fontSize: 8,
+                                fontWeight: FontWeight.bold,
+                                color: green,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ],
                 ),
+                subtitle: isCompleted
+                    ? Text(
+                        "You will be asked to scan the student's pickup QR.",
+                        style: GoogleFonts.poppins(
+                          fontSize: 11,
+                          color: Colors.grey.shade600,
+                        ),
+                      )
+                    : null,
                 onTap: () => Navigator.pop(ctx, s),
               );
             }),
@@ -964,11 +1172,22 @@ class _AdminOrdersPageState extends State<AdminOrdersPage> {
       ),
     );
 
-    if (picked != null && picked != currentStatus) {
-      await _updateStatus(orderId, currentStatus, picked);
+    if (picked == null || picked == currentStatus) return;
+
+    // Intercept Completed → go straight to the scanner. No Firestore write
+    // happens here; the write only fires after a valid scan + confirm.
+    if (picked == 'Completed') {
+      await _openScanner(expectedOrderId: orderId);
+      return;
     }
+
+    // Anything else updates immediately.
+    await _updateStatus(orderId, currentStatus, picked);
   }
 
+  // ─────────────────────────────────────────────
+  // BUILD
+  // ─────────────────────────────────────────────
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -978,16 +1197,15 @@ class _AdminOrdersPageState extends State<AdminOrdersPage> {
         child: StreamBuilder<QuerySnapshot>(
           stream: _firestore.collection('orders').snapshots(),
           builder: (context, snapshot) {
-            // Parse once — reused for earnings + list.
             final allOrders = (snapshot.data?.docs ?? [])
                 .map((d) => _AdminOrder.fromDoc(d))
                 .toList();
 
             final orders = [...allOrders]..sort((a, b) {
-                final aT = a.createdAt ??
-                    DateTime.fromMillisecondsSinceEpoch(0);
-                final bT = b.createdAt ??
-                    DateTime.fromMillisecondsSinceEpoch(0);
+                final aT =
+                    a.createdAt ?? DateTime.fromMillisecondsSinceEpoch(0);
+                final bT =
+                    b.createdAt ?? DateTime.fromMillisecondsSinceEpoch(0);
                 return bT.compareTo(aT);
               });
 
@@ -999,54 +1217,146 @@ class _AdminOrdersPageState extends State<AdminOrdersPage> {
                         _selectedTab.toLowerCase())
                     .toList();
 
+            final filterCount = _selectedTab == 'All'
+                ? orders.length
+                : orders
+                    .where((o) =>
+                        o.status.toLowerCase() ==
+                        _selectedTab.toLowerCase())
+                    .length;
+
             return Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text('Orders Management',
-                    style: GoogleFonts.poppins(
-                        fontSize: 24, fontWeight: FontWeight.w700)),
-                const SizedBox(height: 4),
-                Text(
-                  'Monitor live orders and completed earnings.',
-                  style: GoogleFonts.poppins(
-                      fontSize: 12, color: Colors.grey.shade600),
+                // ── Header row: title + Scan QR button ──
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            'Orders Management',
+                            style: GoogleFonts.poppins(
+                                fontSize: 24, fontWeight: FontWeight.w700),
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                          const SizedBox(height: 4),
+                          Text(
+                            'Monitor live orders and completed earnings.',
+                            style: GoogleFonts.poppins(
+                                fontSize: 12,
+                                color: Colors.grey.shade600),
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    ElevatedButton.icon(
+                      onPressed: () => _openScanner(),
+                      icon: const Icon(Icons.qr_code_scanner, size: 18),
+                      label: Text(
+                        'Scan QR',
+                        style: GoogleFonts.poppins(
+                            fontWeight: FontWeight.w600, fontSize: 13),
+                      ),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: adminPurple,
+                        foregroundColor: Colors.white,
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 14, vertical: 12),
+                        shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(10)),
+                      ),
+                    ),
+                  ],
                 ),
                 const SizedBox(height: 16),
 
                 // ── EARNINGS SUMMARY ──
-                if (snapshot.hasData)
-                  _buildEarningsSummary(allOrders),
+                if (snapshot.hasData) _buildEarningsSummary(allOrders),
                 const SizedBox(height: 16),
 
-                // Filter chips
-                SingleChildScrollView(
-                  scrollDirection: Axis.horizontal,
-                  child: Row(
-                    children: ['All', ..._statuses].map((tab) {
-                      final isSelected = _selectedTab == tab;
-                      return Padding(
-                        padding: const EdgeInsets.only(right: 12),
-                        child: ChoiceChip(
-                          label: Text(tab),
-                          selected: isSelected,
-                          selectedColor: adminPurple,
-                          labelStyle: GoogleFonts.poppins(
-                            color: isSelected
-                                ? Colors.white
-                                : Colors.black87,
-                            fontWeight: isSelected
-                                ? FontWeight.w600
-                                : FontWeight.w400,
+                // ── Status dropdown ──
+                Row(
+                  children: [
+                    Expanded(
+                      child: DropdownButtonFormField<String>(
+                        initialValue: _selectedTab,
+                        isExpanded: true,
+                        decoration: InputDecoration(
+                          labelText: 'Filter by status',
+                          prefixIcon: const Icon(
+                              Icons.filter_list_rounded,
+                              size: 20),
+                          filled: true,
+                          fillColor: Colors.white,
+                          contentPadding: const EdgeInsets.symmetric(
+                              horizontal: 12, vertical: 4),
+                          border: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(12),
+                            borderSide:
+                                BorderSide(color: Colors.grey.shade300),
                           ),
-                          onSelected: (selected) {
-                            if (selected) {
-                              setState(() => _selectedTab = tab);
-                            }
-                          },
+                          enabledBorder: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(12),
+                            borderSide:
+                                BorderSide(color: Colors.grey.shade300),
+                          ),
+                          focusedBorder: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(12),
+                            borderSide: BorderSide(
+                                color: adminPurple, width: 1.6),
+                          ),
                         ),
-                      );
-                    }).toList(),
-                  ),
+                        items: ['All', ..._statuses].map((tab) {
+                          return DropdownMenuItem<String>(
+                            value: tab,
+                            child: Row(
+                              children: [
+                                if (tab != 'All')
+                                  Container(
+                                    width: 10,
+                                    height: 10,
+                                    decoration: BoxDecoration(
+                                      color: _statusColor(tab),
+                                      shape: BoxShape.circle,
+                                    ),
+                                  )
+                                else
+                                  Icon(Icons.apps,
+                                      size: 14, color: adminPurple),
+                                const SizedBox(width: 8),
+                                Text(tab),
+                              ],
+                            ),
+                          );
+                        }).toList(),
+                        onChanged: (v) {
+                          if (v != null) setState(() => _selectedTab = v);
+                        },
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 14, vertical: 14),
+                      decoration: BoxDecoration(
+                        color: adminPurple.withValues(alpha: 0.1),
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      child: Text(
+                        '$filterCount',
+                        style: GoogleFonts.poppins(
+                          fontWeight: FontWeight.w700,
+                          color: adminPurple,
+                          fontSize: 14,
+                        ),
+                      ),
+                    ),
+                  ],
                 ),
                 const SizedBox(height: 16),
 
@@ -1119,6 +1429,7 @@ class _AdminOrdersPageState extends State<AdminOrdersPage> {
         final isUpdating = _updatingId == order.id;
         final cachedName = _nameFor(order.userId);
         final isCompleted = order.status.toLowerCase() == 'completed';
+        final isReady = order.status.toLowerCase() == 'ready';
 
         return ListTile(
           contentPadding:
@@ -1169,6 +1480,31 @@ class _AdminOrdersPageState extends State<AdminOrdersPage> {
                     ),
                   ),
                 ),
+              if (isReady)
+                Container(
+                  margin: const EdgeInsets.only(left: 6),
+                  padding: const EdgeInsets.symmetric(
+                      horizontal: 6, vertical: 2),
+                  decoration: BoxDecoration(
+                    color: green.withValues(alpha: 0.12),
+                    borderRadius: BorderRadius.circular(4),
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(Icons.qr_code_2, size: 10, color: green),
+                      const SizedBox(width: 3),
+                      Text(
+                        'QR READY',
+                        style: GoogleFonts.poppins(
+                          fontSize: 8,
+                          fontWeight: FontWeight.bold,
+                          color: green,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
             ],
           ),
           subtitle: Padding(
@@ -1210,7 +1546,6 @@ class _AdminOrdersPageState extends State<AdminOrdersPage> {
                   child: CircularProgressIndicator(strokeWidth: 2),
                 )
               else if (isCompleted)
-                // ── LOCKED: Completed orders can no longer be changed ──
                 Container(
                   padding: const EdgeInsets.symmetric(
                       horizontal: 10, vertical: 6),
@@ -1334,6 +1669,166 @@ class _AdminOrder {
     final minute = local.minute.toString().padLeft(2, '0');
     return '${months[local.month - 1]} ${local.day}, $hour12:$minute $ampm';
   }
+}
+
+// ═══════════════════════════════════════════════════════════════
+// QR SCANNER SCREEN
+// ═══════════════════════════════════════════════════════════════
+class _QrScannerScreen extends StatefulWidget {
+  const _QrScannerScreen();
+
+  @override
+  State<_QrScannerScreen> createState() => _QrScannerScreenState();
+}
+
+class _QrScannerScreenState extends State<_QrScannerScreen> {
+  final MobileScannerController _controller = MobileScannerController(
+    detectionSpeed: DetectionSpeed.noDuplicates,
+  );
+  bool _handled = false;
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: Colors.black,
+      appBar: AppBar(
+        backgroundColor: Colors.black,
+        foregroundColor: Colors.white,
+        elevation: 0,
+        title: Text(
+          'Scan Pickup QR',
+          style: GoogleFonts.poppins(fontWeight: FontWeight.w600),
+        ),
+      ),
+      body: Stack(
+        children: [
+          MobileScanner(
+            controller: _controller,
+            onDetect: (capture) {
+              if (_handled) return;
+              final barcodes = capture.barcodes;
+              if (barcodes.isEmpty) return;
+              final raw = barcodes.first.rawValue;
+              if (raw == null || raw.isEmpty) return;
+              _handled = true;
+              Navigator.of(context).pop(raw);
+            },
+          ),
+
+          // Viewfinder frame
+          Center(
+            child: Container(
+              width: 250,
+              height: 250,
+              decoration: BoxDecoration(
+                border: Border.all(color: Colors.white, width: 3),
+                borderRadius: BorderRadius.circular(16),
+              ),
+            ),
+          ),
+
+          // Corner accents for a scanner look
+          Positioned(
+            top: MediaQuery.of(context).size.height / 2 - 145,
+            left: MediaQuery.of(context).size.width / 2 - 145,
+            child: _corner(Alignment.topLeft),
+          ),
+          Positioned(
+            top: MediaQuery.of(context).size.height / 2 - 145,
+            right: MediaQuery.of(context).size.width / 2 - 145,
+            child: _corner(Alignment.topRight),
+          ),
+          Positioned(
+            bottom: MediaQuery.of(context).size.height / 2 - 145,
+            left: MediaQuery.of(context).size.width / 2 - 145,
+            child: _corner(Alignment.bottomLeft),
+          ),
+          Positioned(
+            bottom: MediaQuery.of(context).size.height / 2 - 145,
+            right: MediaQuery.of(context).size.width / 2 - 145,
+            child: _corner(Alignment.bottomRight),
+          ),
+
+          Positioned(
+            bottom: 60,
+            left: 0,
+            right: 0,
+            child: Text(
+              "Point the camera at the student's pickup QR",
+              textAlign: TextAlign.center,
+              style: GoogleFonts.poppins(
+                color: Colors.white,
+                fontSize: 12,
+                fontWeight: FontWeight.w500,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _corner(Alignment alignment) {
+    return SizedBox(
+      width: 32,
+      height: 32,
+      child: CustomPaint(
+        painter: _CornerPainter(alignment: alignment),
+      ),
+    );
+  }
+}
+
+class _CornerPainter extends CustomPainter {
+  _CornerPainter({required this.alignment});
+  final Alignment alignment;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final paint = Paint()
+      ..color = Colors.white
+      ..strokeWidth = 4
+      ..strokeCap = StrokeCap.round
+      ..style = PaintingStyle.stroke;
+
+    const path = 22.0;
+
+    switch (alignment) {
+      case Alignment.topLeft:
+        canvas.drawLine(Offset(0, 0), const Offset(path, 0), paint);
+        canvas.drawLine(const Offset(0, 0), Offset(0, path), paint);
+        break;
+      case Alignment.topRight:
+        canvas.drawLine(Offset(size.width, 0),
+            Offset(size.width - path, 0), paint);
+        canvas.drawLine(Offset(size.width, 0), Offset(size.width, path),
+            paint);
+        break;
+      case Alignment.bottomLeft:
+        canvas.drawLine(Offset(0, size.height),
+            Offset(path, size.height), paint);
+        canvas.drawLine(Offset(0, size.height),
+            Offset(0, size.height - path), paint);
+        break;
+      case Alignment.bottomRight:
+        canvas.drawLine(Offset(size.width, size.height),
+            Offset(size.width - path, size.height), paint);
+        canvas.drawLine(Offset(size.width, size.height),
+            Offset(size.width, size.height - path), paint);
+        break;
+      default:
+        break;
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant _CornerPainter old) => false;
 }
 
 // 3. ADMIN MENU MANAGEMENT PAGE

@@ -38,6 +38,7 @@ dependencies:
 
   # UI
   google_fonts: ^6.1.0
+  mobile_scanner: ^5.2.3
   qr_flutter: ^4.1.0
   google_sign_in: ^6.1.5
   # QR Scanner (mobile only - web uses fallback)

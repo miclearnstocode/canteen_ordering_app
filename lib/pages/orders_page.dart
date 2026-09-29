@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:qr_flutter/qr_flutter.dart';
 import '../services/student_state.dart';
 
 class OrdersPage extends StatelessWidget {
@@ -80,7 +81,7 @@ class OrdersPage extends StatelessWidget {
                     );
                   }
 
-                  // Convert to a list of maps and sort newest first.
+                  // Convert to a list of models and sort newest first.
                   final orders = (snapshot.data?.docs ?? [])
                       .map((d) => _Order.fromDoc(d))
                       .toList()
@@ -112,7 +113,8 @@ class OrdersPage extends StatelessWidget {
       child: Column(
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
-          Icon(Icons.receipt_long_outlined, size: 60, color: Colors.grey.shade400),
+          Icon(Icons.receipt_long_outlined,
+              size: 60, color: Colors.grey.shade400),
           const SizedBox(height: 12),
           Text(
             message,
@@ -145,11 +147,11 @@ class OrdersPage extends StatelessWidget {
     return ListView.builder(
       padding: const EdgeInsets.all(16),
       itemCount: filtered.length,
-      itemBuilder: (context, index) => _buildOrderCard(filtered[index]),
+      itemBuilder: (context, index) => _buildOrderCard(context, filtered[index]),
     );
   }
 
-  Widget _buildOrderCard(_Order order) {
+  Widget _buildOrderCard(BuildContext context, _Order order) {
     Color badgeBgColor;
     Color badgeTextColor;
 
@@ -177,13 +179,22 @@ class OrdersPage extends StatelessWidget {
         break;
     }
 
+    final isReady = order.status.toLowerCase() == 'ready';
+    final hasToken = order.pickupToken != null &&
+        order.pickupToken!.isNotEmpty;
+
     return Container(
       margin: const EdgeInsets.only(bottom: 14),
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
         color: Colors.white,
         borderRadius: BorderRadius.circular(18),
-        border: Border.all(color: Colors.grey.shade200),
+        border: Border.all(
+          color: isReady && hasToken
+              ? const Color(0xFFA5D6A7)
+              : Colors.grey.shade200,
+          width: isReady && hasToken ? 1.4 : 1,
+        ),
         boxShadow: [
           BoxShadow(
             color: Colors.black.withValues(alpha: 0.03),
@@ -198,29 +209,48 @@ class OrdersPage extends StatelessWidget {
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              Text(
-                'Order #${order.orderNumber}',
-                style: GoogleFonts.poppins(
-                  fontWeight: FontWeight.w700,
-                  fontSize: 15,
-                  color: Colors.black87,
+              Expanded(
+                child: Text(
+                  'Order #${order.orderNumber}',
+                  style: GoogleFonts.poppins(
+                    fontWeight: FontWeight.w700,
+                    fontSize: 15,
+                    color: Colors.black87,
+                  ),
+                  overflow: TextOverflow.ellipsis,
                 ),
               ),
-              Container(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
-                decoration: BoxDecoration(
-                  color: badgeBgColor,
-                  borderRadius: BorderRadius.circular(20),
-                ),
-                child: Text(
-                  order.status,
-                  style: GoogleFonts.poppins(
-                    fontSize: 12,
-                    color: badgeTextColor,
-                    fontWeight: FontWeight.w600,
+              Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  if (isReady && hasToken)
+                    IconButton(
+                      icon: const Icon(Icons.qr_code_2_rounded,
+                          color: primaryColor, size: 24),
+                      tooltip: 'Show pickup QR',
+                      padding: EdgeInsets.zero,
+                      constraints: const BoxConstraints(
+                          minWidth: 32, minHeight: 32),
+                      onPressed: () => _showPickupQr(context, order),
+                    ),
+                  if (isReady && hasToken) const SizedBox(width: 4),
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 12, vertical: 4),
+                    decoration: BoxDecoration(
+                      color: badgeBgColor,
+                      borderRadius: BorderRadius.circular(20),
+                    ),
+                    child: Text(
+                      order.status,
+                      style: GoogleFonts.poppins(
+                        fontSize: 12,
+                        color: badgeTextColor,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
                   ),
-                ),
+                ],
               ),
             ],
           ),
@@ -250,6 +280,38 @@ class OrdersPage extends StatelessWidget {
           const SizedBox(height: 10),
           Divider(color: Colors.grey.shade100, height: 1),
           const SizedBox(height: 10),
+
+          // ── Ready banner ──
+          if (isReady && hasToken) ...[
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.all(10),
+              decoration: BoxDecoration(
+                color: const Color(0xFFE8F5E9),
+                borderRadius: BorderRadius.circular(10),
+                border: Border.all(color: const Color(0xFFA5D6A7)),
+              ),
+              child: Row(
+                children: [
+                  const Icon(Icons.qr_code_2,
+                      color: primaryColor, size: 18),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      'Your order is ready! Tap the QR icon above and show it at the counter.',
+                      style: GoogleFonts.poppins(
+                        fontSize: 11,
+                        color: primaryColor,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 10),
+          ],
+
           Align(
             alignment: Alignment.centerRight,
             child: Text.rich(
@@ -279,6 +341,92 @@ class OrdersPage extends StatelessWidget {
       ),
     );
   }
+
+  // ─────────────────────────────────────────────
+  // PICKUP QR DIALOG
+  // ─────────────────────────────────────────────
+  void _showPickupQr(BuildContext context, _Order order) {
+    final token = order.pickupToken ?? '';
+    // Structured payload — the admin scanner will parse it.
+    final payload = 'CANTEEN_PICKUP:${order.id}:$token';
+
+    showDialog(
+      context: context,
+      builder: (ctx) => Dialog(
+        shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(20)),
+        child: Padding(
+          padding: const EdgeInsets.all(20),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Row(
+                children: [
+                  const Icon(Icons.qr_code_2, color: primaryColor),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      'Order #${order.orderNumber}',
+                      style: GoogleFonts.poppins(
+                        fontSize: 15,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  ),
+                  IconButton(
+                    onPressed: () => Navigator.pop(ctx),
+                    icon: const Icon(Icons.close),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 8),
+              Container(
+                padding: const EdgeInsets.all(16),
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  borderRadius: BorderRadius.circular(16),
+                  border: Border.all(
+                      color: const Color(0xFFA5D6A7), width: 1.5),
+                ),
+                child: QrImageView(
+                  data: payload,
+                  version: QrVersions.auto,
+                  size: 240,
+                  backgroundColor: Colors.white,
+                  eyeStyle: const QrEyeStyle(
+                    eyeShape: QrEyeShape.square,
+                    color: primaryColor,
+                  ),
+                  dataModuleStyle: const QrDataModuleStyle(
+                    dataModuleShape: QrDataModuleShape.square,
+                    color: Colors.black87,
+                  ),
+                ),
+              ),
+              const SizedBox(height: 14),
+              Text(
+                'Show this at the canteen counter.\nThe staff will scan it to complete your order.',
+                textAlign: TextAlign.center,
+                style: GoogleFonts.poppins(
+                  fontSize: 12,
+                  color: Colors.grey.shade600,
+                ),
+              ),
+              const SizedBox(height: 6),
+              Text(
+                'Ref: $token',
+                style: GoogleFonts.poppins(
+                  fontSize: 10,
+                  color: Colors.grey.shade500,
+                  letterSpacing: 1.2,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
 }
 
 // ---------- Internal order model ----------
@@ -289,6 +437,7 @@ class _Order {
   final DateTime? createdAt;
   final List<_OrderLine> items;
   final double total;
+  final String? pickupToken;
 
   _Order({
     required this.id,
@@ -297,6 +446,7 @@ class _Order {
     required this.createdAt,
     required this.items,
     required this.total,
+    this.pickupToken,
   });
 
   factory _Order.fromDoc(DocumentSnapshot doc) {
@@ -308,6 +458,7 @@ class _Order {
       status: (data['status'] ?? 'Pending').toString(),
       createdAt: (data['createdAt'] as Timestamp?)?.toDate(),
       total: (data['total'] as num?)?.toDouble() ?? 0.0,
+      pickupToken: data['pickupToken'] as String?,
       items: rawItems
           .map((e) => _OrderLine.fromMap(e as Map<String, dynamic>))
           .toList(),
