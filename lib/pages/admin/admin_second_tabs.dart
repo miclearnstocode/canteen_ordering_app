@@ -3,10 +3,10 @@ import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import '../../models/user_model.dart';
 import '../../services/admin_account_service.dart';
+import 'qr_scanner_screen.dart'; 
+import 'package:firebase_auth/firebase_auth.dart';
 
-// ==========================================
 // 6. ADMIN REDEMPTION PAGE
-// ==========================================
 class AdminRedemptionPage extends StatefulWidget {
   const AdminRedemptionPage({super.key});
 
@@ -17,13 +17,17 @@ class AdminRedemptionPage extends StatefulWidget {
 class _AdminRedemptionPageState extends State<AdminRedemptionPage> {
   final Color adminPurple = const Color(0xFF5E35B1);
   final Color green = const Color(0xFF2E7D32);
+  final Color amber = const Color(0xFFF9A825);
+  final FirebaseFirestore _firestore = FirebaseFirestore.instance;
+
   final _codeController = TextEditingController();
 
-  final List<Map<String, dynamic>> _history = [
-    {'code': 'RW-8921', 'reward': 'Free Burger', 'student': 'Marianne Santos', 'time': '10:15 AM', 'status': 'Claimed'},
-    {'code': 'RW-8918', 'reward': 'Free Soft Drink', 'student': 'John Dela Cruz', 'time': '9:40 AM', 'status': 'Claimed'},
-    {'code': 'RW-8904', 'reward': 'Free Rice', 'student': 'Andrea Reyes', 'time': 'Yesterday', 'status': 'Claimed'},
-  ];
+  // ── Filter: 'all' | 'pending' | 'claimed'
+  String _filter = 'all';
+
+  // Cache: uid -> display name
+  final Map<String, String> _nameCache = {};
+  final Set<String> _loadingNames = {};
 
   @override
   void dispose() {
@@ -31,59 +35,224 @@ class _AdminRedemptionPageState extends State<AdminRedemptionPage> {
     super.dispose();
   }
 
-  void _verifyCode() {
-    final code = _codeController.text.trim().toUpperCase();
-    if (code.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Please enter a redemption code')),
-      );
+  String? _nameFor(String uid) {
+    if (uid.isEmpty) return 'Unknown';
+    if (_nameCache.containsKey(uid)) return _nameCache[uid];
+    if (!_loadingNames.contains(uid)) {
+      _loadingNames.add(uid);
+      _firestore.collection('users').doc(uid).get().then((doc) {
+        final data = doc.data();
+        final name =
+            (data?['displayName'] ?? data?['username'] ?? 'Unknown Student')
+                .toString();
+        if (!mounted) return;
+        setState(() {
+          _nameCache[uid] = name;
+          _loadingNames.remove(uid);
+        });
+      }).catchError((_) {
+        if (!mounted) return;
+        setState(() {
+          _nameCache[uid] = 'Unknown Student';
+          _loadingNames.remove(uid);
+        });
+      });
+    }
+    return null;
+  }
+
+  String _formatDateTime(DateTime? dt) {
+    if (dt == null) return '—';
+    final local = dt.toLocal();
+    final months = [
+      'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+      'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec',
+    ];
+    final h12 = local.hour % 12 == 0 ? 12 : local.hour % 12;
+    final ampm = local.hour >= 12 ? 'PM' : 'AM';
+    final min = local.minute.toString().padLeft(2, '0');
+    return '${months[local.month - 1]} ${local.day}, $h12:$min $ampm';
+  }
+
+  // ─────────────────────────────────────────────
+  // SCAN
+  // ─────────────────────────────────────────────
+  Future<void> _openScanner() async {
+    final result = await Navigator.of(context).push<String>(
+      MaterialPageRoute(
+        builder: (_) => const QrScannerScreen(
+          title: 'Scan Reward QR',
+          hint: "Point the camera at the student's reward QR",
+        ),
+      ),
+    );
+    if (result == null || !mounted) return;
+    await _processRewardQr(result);
+  }
+
+  Future<void> _processRewardQr(String raw) async {
+    const prefix = 'REWARD_REDEEM:';
+    if (!raw.startsWith(prefix)) {
+      _feedback('Not a reward redemption QR.', isError: true);
       return;
     }
+    final code = raw.substring(prefix.length).trim();
+    await _verifyAndClaim(code);
+  }
 
-    showDialog(
-      context: context,
-      builder: (context) => AlertDialog(
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
-        title: Row(
-          children: [
-            Icon(Icons.check_circle, color: green, size: 28),
-            const SizedBox(width: 10),
-            Text('Valid Reward Found', style: GoogleFonts.poppins(fontWeight: FontWeight.bold, fontSize: 16)),
-          ],
-        ),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            _infoRow('Redemption Code', code),
-            _infoRow('Reward Item', 'Free Burger (80 Points)'),
-            _infoRow('Student Name', 'Marianne Santos (2023-12345)'),
-            _infoRow('Claim Status', 'Ready for Claiming'),
-          ],
-        ),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
-          ElevatedButton(
-            onPressed: () {
-              setState(() {
-                _history.insert(0, {
-                  'code': code,
-                  'reward': 'Free Burger',
-                  'student': 'Marianne Santos',
-                  'time': 'Just now',
-                  'status': 'Claimed',
-                });
-                _codeController.clear();
-              });
-              Navigator.pop(context);
-              ScaffoldMessenger.of(context).showSnackBar(
-                SnackBar(content: Text('Code $code marked as Claimed!'), backgroundColor: green),
-              );
-            },
-            style: ElevatedButton.styleFrom(backgroundColor: green, foregroundColor: Colors.white),
-            child: const Text('Confirm Claim'),
+  // ─────────────────────────────────────────────
+  // VERIFY + CLAIM
+  // ─────────────────────────────────────────────
+  Future<void> _verifyAndClaim(String code) async {
+    try {
+      final snap = await _firestore
+          .collection('redemptions')
+          .where('code', isEqualTo: code)
+          .limit(1)
+          .get();
+
+      if (snap.docs.isEmpty) {
+        _feedback('No redemption found for code $code.', isError: true);
+        return;
+      }
+
+      final doc = snap.docs.first;
+      final data = doc.data();
+      final status = (data['status'] ?? 'pending').toString();
+
+      if (status != 'pending') {
+        _feedback(
+          'This reward has already been claimed.',
+          isError: true,
+        );
+        return;
+      }
+
+      final userId = (data['userId'] ?? '').toString();
+      final rewardName = (data['rewardName'] ?? 'Reward').toString();
+      final pointsCost = (data['pointsCost'] as num?)?.toInt() ?? 0;
+      final studentName = _nameFor(userId) ?? 'Loading…';
+
+      final confirmed = await showDialog<bool>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(18)),
+          title: Row(
+            children: [
+              Icon(Icons.check_circle, color: green, size: 24),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Text('Valid Reward Found',
+                    style: GoogleFonts.poppins(
+                        fontWeight: FontWeight.bold, fontSize: 16)),
+              ),
+            ],
           ),
-        ],
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              _infoRow('Redemption Code', code),
+              _infoRow('Reward Item',
+                  '$rewardName ($pointsCost Points)'),
+              _infoRow('Student', studentName),
+              _infoRow('Claim Status', 'Ready for Claiming'),
+              const SizedBox(height: 6),
+              Container(
+                padding: const EdgeInsets.all(10),
+                decoration: BoxDecoration(
+                  color: Colors.amber.shade50,
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: Colors.amber.shade200),
+                ),
+                child: Row(
+                  children: [
+                    Icon(Icons.info_outline,
+                        size: 16, color: Colors.amber.shade800),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        'Points were already deducted when the student redeemed. '
+                        'Confirming here only releases the physical reward.',
+                        style: GoogleFonts.poppins(
+                          fontSize: 11,
+                          color: Colors.amber.shade900,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('Cancel'),
+            ),
+            ElevatedButton(
+              onPressed: () => Navigator.pop(ctx, true),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: green,
+                foregroundColor: Colors.white,
+              ),
+              child: const Text('Confirm Claim'),
+            ),
+          ],
+        ),
+      );
+
+      if (confirmed != true) return;
+
+      // Atomic flip: only mark claimed if still pending.
+      final adminUid = FirebaseAuth.instance.currentUser?.uid;
+      if (adminUid == null) {
+        _feedback('Admin session expired. Please log in again.',
+            isError: true);
+        return;
+      }
+
+      await _firestore.runTransaction((tx) async {
+        final freshSnap = await tx.get(doc.reference);
+        if (!freshSnap.exists) {
+          throw Exception('Redemption no longer exists.');
+        }
+        final currentStatus =
+            (freshSnap.data()?['status'] ?? 'pending').toString();
+        if (currentStatus != 'pending') {
+          throw Exception('This reward has already been claimed.');
+        }
+        tx.update(doc.reference, {
+          'status': 'claimed',
+          'claimedAt': FieldValue.serverTimestamp(),
+          'claimedBy': adminUid,
+        });
+      });
+
+      _feedback('Code $code claimed successfully!');
+      _codeController.clear();
+    } catch (e) {
+      _feedback(e.toString().replaceFirst('Exception: ', ''),
+          isError: true);
+    }
+  }
+
+  Future<void> _verifyCodeManually() async {
+    final code = _codeController.text.trim().toUpperCase();
+    if (code.isEmpty) {
+      _feedback('Please enter a redemption code', isError: true);
+      return;
+    }
+    await _verifyAndClaim(code);
+  }
+
+  void _feedback(String msg, {bool isError = false}) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(msg),
+        backgroundColor: isError ? Colors.red.shade600 : green,
       ),
     );
   }
@@ -94,13 +263,25 @@ class _AdminRedemptionPageState extends State<AdminRedemptionPage> {
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          SizedBox(width: 120, child: Text('$label:', style: GoogleFonts.poppins(fontSize: 12, color: Colors.grey.shade600))),
-          Expanded(child: Text(value, style: GoogleFonts.poppins(fontSize: 12, fontWeight: FontWeight.w600))),
+          SizedBox(
+            width: 120,
+            child: Text('$label:',
+                style: GoogleFonts.poppins(
+                    fontSize: 12, color: Colors.grey.shade600)),
+          ),
+          Expanded(
+            child: Text(value,
+                style: GoogleFonts.poppins(
+                    fontSize: 12, fontWeight: FontWeight.w600)),
+          ),
         ],
       ),
     );
   }
 
+  // ─────────────────────────────────────────────
+  // BUILD
+  // ─────────────────────────────────────────────
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -110,10 +291,34 @@ class _AdminRedemptionPageState extends State<AdminRedemptionPage> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text('Scan & Claim Rewards', style: GoogleFonts.poppins(fontSize: 24, fontWeight: FontWeight.w700)),
+            // ── Header ──
+            Row(
+              children: [
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text('Scan & Claim Rewards',
+                          style: GoogleFonts.poppins(
+                              fontSize: 24,
+                              fontWeight: FontWeight.w700)),
+                      const SizedBox(height: 4),
+                      Text(
+                        'Scan a student\'s reward QR to release the reward.',
+                        style: GoogleFonts.poppins(
+                            fontSize: 12,
+                            color: Colors.grey.shade600),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
             const SizedBox(height: 16),
+
+            // ── Scanner card ──
             Container(
-              padding: const EdgeInsets.all(24),
+              padding: const EdgeInsets.all(20),
               decoration: BoxDecoration(
                 color: Colors.white,
                 borderRadius: BorderRadius.circular(18),
@@ -121,10 +326,9 @@ class _AdminRedemptionPageState extends State<AdminRedemptionPage> {
               ),
               child: Column(
                 children: [
-                  // Mock Scanner Frame
                   Container(
-                    width: 180,
-                    height: 180,
+                    width: 160,
+                    height: 160,
                     decoration: BoxDecoration(
                       color: Colors.grey.shade50,
                       border: Border.all(color: green, width: 2.5),
@@ -133,37 +337,72 @@ class _AdminRedemptionPageState extends State<AdminRedemptionPage> {
                     child: Column(
                       mainAxisAlignment: MainAxisAlignment.center,
                       children: [
-                        Icon(Icons.qr_code_scanner, size: 64, color: green),
+                        Icon(Icons.qr_code_scanner,
+                            size: 56, color: green),
                         const SizedBox(height: 8),
-                        Text('Camera Scanner Ready', style: GoogleFonts.poppins(fontSize: 11, color: Colors.grey.shade600)),
+                        Text('Ready to scan',
+                            style: GoogleFonts.poppins(
+                                fontSize: 11,
+                                color: Colors.grey.shade600)),
                       ],
                     ),
                   ),
-                  const SizedBox(height: 20),
-                  Text('— OR ENTER CODE MANUALLY —', style: GoogleFonts.poppins(fontSize: 11, color: Colors.grey.shade500, fontWeight: FontWeight.w600)),
                   const SizedBox(height: 16),
+                  SizedBox(
+                    width: double.infinity,
+                    child: ElevatedButton.icon(
+                      onPressed: _openScanner,
+                      icon: const Icon(Icons.qr_code_scanner, size: 18),
+                      label: Text('Scan Reward QR',
+                          style: GoogleFonts.poppins(
+                              fontWeight: FontWeight.w600)),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: green,
+                        foregroundColor: Colors.white,
+                        padding:
+                            const EdgeInsets.symmetric(vertical: 14),
+                        shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(12)),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+                  Text('— OR ENTER CODE MANUALLY —',
+                      style: GoogleFonts.poppins(
+                          fontSize: 11,
+                          color: Colors.grey.shade500,
+                          fontWeight: FontWeight.w600)),
+                  const SizedBox(height: 12),
                   Row(
                     children: [
                       Expanded(
                         child: TextField(
                           controller: _codeController,
-                          textCapitalization: TextCapitalization.characters,
+                          textCapitalization:
+                              TextCapitalization.characters,
                           decoration: InputDecoration(
-                            hintText: 'e.g. RW-8921',
-                            prefixIcon: const Icon(Icons.confirmation_number_outlined),
-                            border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
-                            contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+                            hintText: 'e.g. RW-7K3M9Q',
+                            prefixIcon: const Icon(
+                                Icons.confirmation_number_outlined),
+                            border: OutlineInputBorder(
+                                borderRadius: BorderRadius.circular(10)),
+                            contentPadding:
+                                const EdgeInsets.symmetric(
+                                    horizontal: 14, vertical: 12),
                           ),
+                          onSubmitted: (_) => _verifyCodeManually(),
                         ),
                       ),
                       const SizedBox(width: 12),
                       ElevatedButton(
-                        onPressed: _verifyCode,
+                        onPressed: _verifyCodeManually,
                         style: ElevatedButton.styleFrom(
                           backgroundColor: green,
                           foregroundColor: Colors.white,
-                          padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 14),
-                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 24, vertical: 14),
+                          shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(10)),
                         ),
                         child: const Text('Verify'),
                       ),
@@ -173,8 +412,60 @@ class _AdminRedemptionPageState extends State<AdminRedemptionPage> {
               ),
             ),
             const SizedBox(height: 24),
-            // Recent Redemptions
-            Text('Recent Redemptions', style: GoogleFonts.poppins(fontSize: 18, fontWeight: FontWeight.w700)),
+
+            // ── Pending Claims section ──
+            const _PendingClaimsHeader(),
+            const SizedBox(height: 10),
+            _PendingClaimsList(nameFor: _nameFor, onClaim: _verifyAndClaim),
+            const SizedBox(height: 24),
+
+            // ── Recent Redemptions ──
+            Row(
+              children: [
+                Expanded(
+                  child: Text('Redemption History',
+                      style: GoogleFonts.poppins(
+                          fontSize: 18, fontWeight: FontWeight.w700)),
+                ),
+                // Filter dropdown
+                SizedBox(
+                  width: 160,
+                  child: DropdownButtonFormField<String>(
+                    initialValue: _filter,
+                    isExpanded: true,
+                    decoration: InputDecoration(
+                      labelText: 'Filter',
+                      filled: true,
+                      fillColor: Colors.white,
+                      contentPadding: const EdgeInsets.symmetric(
+                          horizontal: 10, vertical: 4),
+                      border: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(10)),
+                      enabledBorder: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(10),
+                        borderSide: BorderSide(color: Colors.grey.shade300),
+                      ),
+                      focusedBorder: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(10),
+                        borderSide:
+                            BorderSide(color: adminPurple, width: 1.4),
+                      ),
+                    ),
+                    items: const [
+                      DropdownMenuItem(
+                          value: 'all', child: Text('All')),
+                      DropdownMenuItem(
+                          value: 'pending', child: Text('Pending')),
+                      DropdownMenuItem(
+                          value: 'claimed', child: Text('Claimed')),
+                    ],
+                    onChanged: (v) {
+                      if (v != null) setState(() => _filter = v);
+                    },
+                  ),
+                ),
+              ],
+            ),
             const SizedBox(height: 12),
             Container(
               decoration: BoxDecoration(
@@ -182,29 +473,283 @@ class _AdminRedemptionPageState extends State<AdminRedemptionPage> {
                 borderRadius: BorderRadius.circular(18),
                 border: Border.all(color: Colors.grey.shade200),
               ),
-              child: ListView.separated(
-                shrinkWrap: true,
-                physics: const NeverScrollableScrollPhysics(),
-                itemCount: _history.length,
-                separatorBuilder: (context, i) => Divider(color: Colors.grey.shade100),
-                itemBuilder: (context, index) {
-                  final item = _history[index];
-                  return ListTile(
-                    leading: Container(
-                      padding: const EdgeInsets.all(8),
-                      decoration: BoxDecoration(color: green.withValues(alpha: 0.1), shape: BoxShape.circle),
-                      child: Icon(Icons.check, color: green, size: 20),
-                    ),
-                    title: Text('${item['reward']} (${item['code']})', style: GoogleFonts.poppins(fontWeight: FontWeight.w600, fontSize: 13)),
-                    subtitle: Text('${item['student']} • ${item['time']}', style: GoogleFonts.poppins(fontSize: 12, color: Colors.grey.shade600)),
-                    trailing: Text(item['status'] as String, style: GoogleFonts.poppins(fontWeight: FontWeight.w600, color: green, fontSize: 12)),
-                  );
-                },
-              ),
+              child: _buildHistoryList(),
             ),
           ],
         ),
       ),
+    );
+  }
+
+  Widget _buildHistoryList() {
+    return StreamBuilder<QuerySnapshot>(
+      stream: _firestore
+          .collection('redemptions')
+          .orderBy('createdAt', descending: true)
+          .limit(50)
+          .snapshots(),
+      builder: (context, snapshot) {
+        if (snapshot.connectionState == ConnectionState.waiting) {
+          return const Padding(
+            padding: EdgeInsets.all(24),
+            child: Center(child: CircularProgressIndicator()),
+          );
+        }
+        if (snapshot.hasError) {
+          return Padding(
+            padding: const EdgeInsets.all(24),
+            child: Center(
+              child: Text('Failed to load redemptions:\n${snapshot.error}',
+                  textAlign: TextAlign.center,
+                  style: GoogleFonts.poppins(
+                      color: Colors.red.shade700, fontSize: 12)),
+            ),
+          );
+        }
+
+        var docs = snapshot.data?.docs ?? [];
+        if (_filter != 'all') {
+          docs = docs.where((d) {
+            final s = ((d.data() as Map)['status'] ?? 'pending').toString();
+            return s == _filter;
+          }).toList();
+        }
+
+        if (docs.isEmpty) {
+          return Padding(
+            padding: const EdgeInsets.all(24),
+            child: Center(
+              child: Text(
+                _filter == 'all'
+                    ? 'No redemptions yet'
+                    : 'No $_filter redemptions',
+                style: GoogleFonts.poppins(color: Colors.grey.shade600),
+              ),
+            ),
+          );
+        }
+
+        return ListView.separated(
+          shrinkWrap: true,
+          physics: const NeverScrollableScrollPhysics(),
+          itemCount: docs.length,
+          separatorBuilder: (_, __) =>
+              Divider(color: Colors.grey.shade100),
+          itemBuilder: (context, index) {
+            final d = docs[index].data() as Map<String, dynamic>;
+            final code = (d['code'] ?? '').toString();
+            final rewardName = (d['rewardName'] ?? 'Reward').toString();
+            final userId = (d['userId'] ?? '').toString();
+            final status = (d['status'] ?? 'pending').toString();
+            final created = (d['createdAt'] as Timestamp?)?.toDate();
+            final claimedAt = (d['claimedAt'] as Timestamp?)?.toDate();
+            final isClaimed = status == 'claimed';
+            final color = isClaimed ? green : amber;
+            final cachedName = _nameFor(userId);
+
+            return ListTile(
+              leading: Container(
+                padding: const EdgeInsets.all(8),
+                decoration: BoxDecoration(
+                  color: color.withValues(alpha: 0.1),
+                  shape: BoxShape.circle,
+                ),
+                child: Icon(
+                  isClaimed ? Icons.check : Icons.hourglass_empty,
+                  color: color,
+                  size: 20,
+                ),
+              ),
+              title: Text(
+                '$rewardName ($code)',
+                style: GoogleFonts.poppins(
+                    fontWeight: FontWeight.w600, fontSize: 13),
+              ),
+              subtitle: Text(
+                '${cachedName ?? "Loading…"} • '
+                '${isClaimed && claimedAt != null ? "Claimed ${_formatDateTime(claimedAt)}" : _formatDateTime(created)}',
+                style: GoogleFonts.poppins(
+                    fontSize: 12, color: Colors.grey.shade600),
+              ),
+              trailing: isClaimed
+                  ? Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 10, vertical: 4),
+                      decoration: BoxDecoration(
+                        color: green.withValues(alpha: 0.12),
+                        borderRadius: BorderRadius.circular(6),
+                      ),
+                      child: Text(
+                        'Claimed',
+                        style: GoogleFonts.poppins(
+                          fontWeight: FontWeight.w700,
+                          color: green,
+                          fontSize: 11,
+                        ),
+                      ),
+                    )
+                  : TextButton(
+                      onPressed: () => _verifyAndClaim(code),
+                      style: TextButton.styleFrom(
+                        foregroundColor: green,
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 10, vertical: 4),
+                      ),
+                      child: Text(
+                        'Claim',
+                        style: GoogleFonts.poppins(
+                            fontWeight: FontWeight.w700, fontSize: 12),
+                      ),
+                    ),
+            );
+          },
+        );
+      },
+    );
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════
+// Pending Claims widgets
+// ═══════════════════════════════════════════════════════════════
+class _PendingClaimsHeader extends StatelessWidget {
+  const _PendingClaimsHeader();
+
+  @override
+  Widget build(BuildContext context) {
+    return StreamBuilder<QuerySnapshot>(
+      stream: FirebaseFirestore.instance
+          .collection('redemptions')
+          .where('status', isEqualTo: 'pending')
+          .snapshots(),
+      builder: (context, snap) {
+        final count = snap.data?.docs.length ?? 0;
+        if (count == 0) return const SizedBox.shrink();
+        return Row(
+          children: [
+            const Icon(Icons.hourglass_top_rounded,
+                color: Color(0xFFF9A825), size: 20),
+            const SizedBox(width: 8),
+            Text(
+              'Pending Claims',
+              style: GoogleFonts.poppins(
+                  fontSize: 18, fontWeight: FontWeight.w700),
+            ),
+            const SizedBox(width: 8),
+            Container(
+              padding: const EdgeInsets.symmetric(
+                  horizontal: 8, vertical: 2),
+              decoration: BoxDecoration(
+                color: const Color(0xFFF9A825).withValues(alpha: 0.15),
+                borderRadius: BorderRadius.circular(20),
+              ),
+              child: Text(
+                '$count',
+                style: GoogleFonts.poppins(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w700,
+                  color: const Color(0xFFF9A825),
+                ),
+              ),
+            ),
+          ],
+        );
+      },
+    );
+  }
+}
+
+class _PendingClaimsList extends StatelessWidget {
+  const _PendingClaimsList({
+    required this.nameFor,
+    required this.onClaim,
+  });
+
+  final String? Function(String uid) nameFor;
+  final Future<void> Function(String code) onClaim;
+
+  @override
+  Widget build(BuildContext context) {
+    return StreamBuilder<QuerySnapshot>(
+      stream: FirebaseFirestore.instance
+          .collection('redemptions')
+          .where('status', isEqualTo: 'pending')
+          .snapshots(),
+      builder: (context, snap) {
+        final docs = snap.data?.docs ?? [];
+        if (docs.isEmpty) return const SizedBox.shrink();
+
+        // Sort newest first.
+        docs.sort((a, b) {
+          final aT = ((a.data() as Map)['createdAt'] as Timestamp?)
+                  ?.toDate() ??
+              DateTime.fromMillisecondsSinceEpoch(0);
+          final bT = ((b.data() as Map)['createdAt'] as Timestamp?)
+                  ?.toDate() ??
+              DateTime.fromMillisecondsSinceEpoch(0);
+          return bT.compareTo(aT);
+        });
+
+        return Container(
+          decoration: BoxDecoration(
+            color: const Color(0xFFFFF8E1),
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(color: const Color(0xFFFFE082)),
+          ),
+          child: Column(
+            children: docs.map((d) {
+              final data = d.data() as Map<String, dynamic>;
+              final code = (data['code'] ?? '').toString();
+              final rewardName =
+                  (data['rewardName'] ?? 'Reward').toString();
+              final pointsCost =
+                  (data['pointsCost'] as num?)?.toInt() ?? 0;
+
+              return ListTile(
+                leading: Container(
+                  padding: const EdgeInsets.all(8),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFFFE082).withValues(alpha: 0.6),
+                    shape: BoxShape.circle,
+                  ),
+                  child: const Icon(Icons.card_giftcard,
+                      color: Color(0xFFE65100), size: 20),
+                ),
+                title: Text(
+                  rewardName,
+                  style: GoogleFonts.poppins(
+                      fontWeight: FontWeight.w600, fontSize: 13),
+                ),
+                subtitle: Text(
+                  'Ref: $code • $pointsCost pts',
+                  style: GoogleFonts.poppins(
+                      fontSize: 11, color: Colors.grey.shade700),
+                ),
+                trailing: TextButton(
+                  onPressed: () {
+                    // Find and verify through the parent state
+                    final state = context
+                        .findAncestorStateOfType<_AdminRedemptionPageState>();
+                    state?._verifyAndClaim(code);
+                  },
+                  style: TextButton.styleFrom(
+                    backgroundColor: const Color(0xFF2E7D32),
+                    foregroundColor: Colors.white,
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 12, vertical: 8),
+                    shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(8)),
+                  ),
+                  child: Text('Claim',
+                      style: GoogleFonts.poppins(
+                          fontSize: 12,
+                          fontWeight: FontWeight.w600)),
+                ),
+              );
+            }).toList(),
+          ),
+        );
+      },
     );
   }
 }
