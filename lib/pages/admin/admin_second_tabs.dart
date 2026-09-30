@@ -1210,9 +1210,7 @@ class _CreditTx {
   }
 }
 
-// ==========================================
-// 8. ADMIN REPORTS PAGE (LIVE)
-// ==========================================
+// 8. ADMIN REPORTS PAGE 
 class AdminReportsPage extends StatefulWidget {
   const AdminReportsPage({super.key});
 
@@ -1453,8 +1451,7 @@ class _AdminReportsPageState extends State<AdminReportsPage> {
       rows.add(_row('⛔ Out of Stock',
           '${_inventory.out.length} item(s)'));
       for (final item in _inventory.out) {
-        rows.add(_row('   • ${item.name}',
-            '0 ${item.unit}'));
+        rows.add(_row('   • ${item.name}', '0 ${item.unit}'));
       }
     }
     if (_inventory.low.isNotEmpty) {
@@ -1589,29 +1586,42 @@ class _AdminReportsPageState extends State<AdminReportsPage> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text('Sales & Analytical Reports',
-                        style: GoogleFonts.poppins(
-                            fontSize: 24,
-                            fontWeight: FontWeight.w700)),
-                    const SizedBox(height: 2),
-                    Text('Live data from your Firestore',
-                        style: GoogleFonts.poppins(
-                            fontSize: 12,
-                            color: Colors.grey.shade600)),
-                  ],
+            // ── HEADER: title on top, refresh below ──
+            Text(
+              'Sales & Analytical Reports',
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+              style: GoogleFonts.poppins(
+                  fontSize: 24, fontWeight: FontWeight.w700),
+            ),
+            const SizedBox(height: 2),
+            Text(
+              'Live data from your Firestore',
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: GoogleFonts.poppins(
+                  fontSize: 12, color: Colors.grey.shade600),
+            ),
+            const SizedBox(height: 10),
+            Align(
+              alignment: Alignment.centerLeft,
+              child: OutlinedButton.icon(
+                onPressed: _loading ? null : _loadAll,
+                icon: const Icon(Icons.refresh, size: 18),
+                label: Text(
+                  'Refresh',
+                  style: GoogleFonts.poppins(fontSize: 13),
                 ),
-                IconButton(
-                  onPressed: _loading ? null : _loadAll,
-                  tooltip: 'Refresh',
-                  icon: const Icon(Icons.refresh),
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: adminPurple,
+                  side: BorderSide(
+                      color: adminPurple.withValues(alpha: 0.4)),
+                  padding: const EdgeInsets.symmetric(
+                      horizontal: 14, vertical: 8),
+                  shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(10)),
                 ),
-              ],
+              ),
             ),
             const SizedBox(height: 16),
 
@@ -1690,59 +1700,63 @@ class _AdminReportsPageState extends State<AdminReportsPage> {
                       const SizedBox(height: 20),
 
                       // ── Report tiles ──
-                      Container(
-                        decoration: BoxDecoration(
-                          color: Colors.white,
-                          borderRadius: BorderRadius.circular(18),
-                          border: Border.all(color: Colors.grey.shade200),
-                        ),
-                        child: Column(
-                          children: [
-                            _reportTile(
-                              context,
-                              Icons.calendar_today,
-                              'Daily Sales Report',
-                              'Summary of all transactions today',
-                              _showDailyReport,
-                            ),
-                            const Divider(height: 1),
-                            _reportTile(
-                              context,
-                              Icons.calendar_month,
-                              'Monthly Sales Report',
-                              'Revenue breakdown for current month',
-                              _showMonthlyReport,
-                            ),
-                            const Divider(height: 1),
-                            _reportTile(
-                              context,
-                              Icons.restaurant,
-                              'Best Selling Foods',
-                              _topItems.isEmpty
-                                  ? 'No sales data yet'
-                                  : 'Top ${_topItems.length} by quantity sold',
-                              _showTopItemsReport,
-                            ),
-                            const Divider(height: 1),
-                            _reportTile(
-                              context,
-                              Icons.inventory_2_outlined,
-                              'Inventory Restock Report',
-                              _inventory.out.isEmpty &&
-                                      _inventory.low.isEmpty
-                                  ? 'All items are well-stocked'
-                                  : '${_inventory.out.length} out • ${_inventory.low.length} low',
-                              _showInventoryReport,
-                            ),
-                            const Divider(height: 1),
-                            _reportTile(
-                              context,
-                              Icons.stars,
-                              'Loyalty Points Report',
-                              '${_loyalty.earned} earned • ${_loyalty.redeemed} redeemed',
-                              _showLoyaltyReport,
-                            ),
-                          ],
+                      Material(
+                        color: Colors.white,
+                        borderRadius: BorderRadius.circular(18),
+                        child: Container(
+                          decoration: BoxDecoration(
+                            borderRadius: BorderRadius.circular(18),
+                            border:
+                                Border.all(color: Colors.grey.shade200),
+                          ),
+                          child: Column(
+                            children: [
+                              _reportTile(
+                                context,
+                                Icons.calendar_today,
+                                'Daily Sales Report',
+                                'Summary of all transactions today',
+                                _showDailyReport,
+                              ),
+                              const Divider(height: 1),
+                              _reportTile(
+                                context,
+                                Icons.calendar_month,
+                                'Monthly Sales Report',
+                                'Revenue breakdown for current month',
+                                _showMonthlyReport,
+                              ),
+                              const Divider(height: 1),
+                              _reportTile(
+                                context,
+                                Icons.restaurant,
+                                'Best Selling Foods',
+                                _topItems.isEmpty
+                                    ? 'No sales data yet'
+                                    : 'Top ${_topItems.length} by quantity sold',
+                                _showTopItemsReport,
+                              ),
+                              const Divider(height: 1),
+                              _reportTile(
+                                context,
+                                Icons.inventory_2_outlined,
+                                'Inventory Restock Report',
+                                _inventory.out.isEmpty &&
+                                        _inventory.low.isEmpty
+                                    ? 'All items are well-stocked'
+                                    : '${_inventory.out.length} out • ${_inventory.low.length} low',
+                                _showInventoryReport,
+                              ),
+                              const Divider(height: 1),
+                              _reportTile(
+                                context,
+                                Icons.stars,
+                                'Loyalty Points Report',
+                                '${_loyalty.earned} earned • ${_loyalty.redeemed} redeemed',
+                                _showLoyaltyReport,
+                              ),
+                            ],
+                          ),
                         ),
                       ),
                       const SizedBox(height: 24),
@@ -1753,43 +1767,53 @@ class _AdminReportsPageState extends State<AdminReportsPage> {
                           Expanded(
                             child: ElevatedButton.icon(
                               onPressed: () {
-                                ScaffoldMessenger.of(context).showSnackBar(
-                                    const SnackBar(
-                                        content:
-                                            Text('Exporting PDF...')));
+                                ScaffoldMessenger.of(context)
+                                    .showSnackBar(const SnackBar(
+                                  content: Text('Exporting PDF...'),
+                                ));
                               },
-                              icon: const Icon(Icons.picture_as_pdf),
-                              label: const Text('Export All PDF'),
+                              icon: const Icon(Icons.picture_as_pdf,
+                                  size: 18),
+                              label: Text(
+                                'Export All PDF',
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: GoogleFonts.poppins(fontSize: 13),
+                              ),
                               style: ElevatedButton.styleFrom(
                                 backgroundColor: Colors.red.shade700,
                                 foregroundColor: Colors.white,
                                 padding: const EdgeInsets.symmetric(
-                                    vertical: 14),
+                                    vertical: 14, horizontal: 8),
                                 shape: RoundedRectangleBorder(
                                     borderRadius:
                                         BorderRadius.circular(10)),
                               ),
                             ),
                           ),
-                          const SizedBox(width: 16),
+                          const SizedBox(width: 8),
                           Expanded(
                             child: ElevatedButton.icon(
                               onPressed: () {
-                                ScaffoldMessenger.of(context).showSnackBar(
-                                  const SnackBar(
-                                    content: Text(
-                                        'Exporting Excel spreadsheet...'),
-                                    backgroundColor: green,
-                                  ),
-                                );
+                                ScaffoldMessenger.of(context)
+                                    .showSnackBar(const SnackBar(
+                                  content: Text(
+                                      'Exporting Excel spreadsheet...'),
+                                  backgroundColor: green,
+                                ));
                               },
-                              icon: const Icon(Icons.grid_on),
-                              label: const Text('Export Excel (CSV)'),
+                              icon: const Icon(Icons.grid_on, size: 18),
+                              label: Text(
+                                'Export Excel (CSV)',
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: GoogleFonts.poppins(fontSize: 13),
+                              ),
                               style: ElevatedButton.styleFrom(
                                 backgroundColor: green,
                                 foregroundColor: Colors.white,
                                 padding: const EdgeInsets.symmetric(
-                                    vertical: 14),
+                                    vertical: 14, horizontal: 8),
                                 shape: RoundedRectangleBorder(
                                     borderRadius:
                                         BorderRadius.circular(10)),
@@ -1837,18 +1861,30 @@ class _AdminReportsPageState extends State<AdminReportsPage> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(label,
-                    style: GoogleFonts.poppins(
-                        fontSize: 11, color: Colors.grey.shade600)),
+                Text(
+                  label,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: GoogleFonts.poppins(
+                      fontSize: 11, color: Colors.grey.shade600),
+                ),
                 const SizedBox(height: 2),
-                Text(value,
-                    style: GoogleFonts.poppins(
-                        fontSize: 18,
-                        fontWeight: FontWeight.w800,
-                        color: color)),
-                Text(subtitle,
-                    style: GoogleFonts.poppins(
-                        fontSize: 10, color: Colors.grey.shade500)),
+                Text(
+                  value,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: GoogleFonts.poppins(
+                      fontSize: 18,
+                      fontWeight: FontWeight.w800,
+                      color: color),
+                ),
+                Text(
+                  subtitle,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: GoogleFonts.poppins(
+                      fontSize: 10, color: Colors.grey.shade500),
+                ),
               ],
             ),
           ),
@@ -1874,12 +1910,20 @@ class _AdminReportsPageState extends State<AdminReportsPage> {
         ),
         child: Icon(icon, color: adminPurple, size: 20),
       ),
-      title: Text(title,
-          style: GoogleFonts.poppins(
-              fontWeight: FontWeight.w600, fontSize: 14)),
-      subtitle: Text(subtitle,
-          style: GoogleFonts.poppins(
-              fontSize: 12, color: Colors.grey.shade600)),
+      title: Text(
+        title,
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
+        style: GoogleFonts.poppins(
+            fontWeight: FontWeight.w600, fontSize: 14),
+      ),
+      subtitle: Text(
+        subtitle,
+        maxLines: 2,
+        overflow: TextOverflow.ellipsis,
+        style: GoogleFonts.poppins(
+            fontSize: 12, color: Colors.grey.shade600),
+      ),
       trailing: const Icon(Icons.chevron_right, size: 20),
     );
   }

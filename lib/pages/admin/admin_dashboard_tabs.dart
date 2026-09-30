@@ -197,36 +197,42 @@ class AdminDashboardPage extends StatelessWidget {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Row(
-                        mainAxisAlignment:
-                            MainAxisAlignment.spaceBetween,
+                        crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          Column(
-                            crossAxisAlignment:
-                                CrossAxisAlignment.start,
-                            children: [
-                              Text(
-                                'Weekly Earnings',
-                                style: GoogleFonts.poppins(
-                                    fontSize: 16,
-                                    fontWeight: FontWeight.w700),
-                              ),
-                              Text(
-                                'Last 7 days • based on completed orders',
-                                style: GoogleFonts.poppins(
-                                    fontSize: 12,
-                                    color: Colors.grey.shade500),
-                              ),
-                            ],
+                          Expanded(                         // <-- takes remaining width, forces the Column to shrink
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  'Weekly Earnings',
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: GoogleFonts.poppins(
+                                      fontSize: 16, fontWeight: FontWeight.w700),
+                                ),
+                                const SizedBox(height: 2),
+                                Text(
+                                  'Last 7 days • based on completed orders',
+                                  maxLines: 2,              // allow wrap on very narrow screens
+                                  overflow: TextOverflow.ellipsis,
+                                  style: GoogleFonts.poppins(
+                                      fontSize: 12, color: Colors.grey.shade500),
+                                ),
+                              ],
+                            ),
                           ),
+                          const SizedBox(width: 12),         // guarantee a gap before the badge
                           Container(
-                            padding: const EdgeInsets.symmetric(
-                                horizontal: 12, vertical: 6),
+                            padding:
+                                const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
                             decoration: BoxDecoration(
                               color: adminPurple.withValues(alpha: 0.1),
                               borderRadius: BorderRadius.circular(20),
                             ),
                             child: Text(
                               'Total: ₱${weeklyTotal.toStringAsFixed(0)}',
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
                               style: GoogleFonts.poppins(
                                   fontSize: 12,
                                   fontWeight: FontWeight.w600,
@@ -674,9 +680,7 @@ class _AdminOrdersPageState extends State<AdminOrdersPage> {
     );
   }
 
-  // ─────────────────────────────────────────────
   // EARNINGS SUMMARY CARD
-  // ─────────────────────────────────────────────
   Widget _buildEarningsSummary(List<_AdminOrder> orders) {
     final now = DateTime.now();
     final todayStart = DateTime(now.year, now.month, now.day);
@@ -734,6 +738,33 @@ class _AdminOrdersPageState extends State<AdminOrdersPage> {
           ],
         );
       },
+    );
+  }
+  
+  Widget _orderBadge(String label, {IconData? icon}) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+      decoration: BoxDecoration(
+        color: green.withValues(alpha: 0.12),
+        borderRadius: BorderRadius.circular(4),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          if (icon != null) ...[
+            Icon(icon, size: 10, color: green),
+            const SizedBox(width: 3),
+          ],
+          Text(
+            label,
+            style: GoogleFonts.poppins(
+              fontSize: 8,
+              fontWeight: FontWeight.bold,
+              color: green,
+            ),
+          ),
+        ],
+      ),
     );
   }
 
@@ -1431,175 +1462,162 @@ class _AdminOrdersPageState extends State<AdminOrdersPage> {
         final isCompleted = order.status.toLowerCase() == 'completed';
         final isReady = order.status.toLowerCase() == 'ready';
 
-        return ListTile(
-          contentPadding:
-              const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
-          leading: Container(
-            padding: const EdgeInsets.all(10),
-            decoration: BoxDecoration(
-              color: color.withValues(alpha: 0.1),
-              borderRadius: BorderRadius.circular(10),
-            ),
-            child: Text(
-              '#${order.orderNumber}',
-              style: GoogleFonts.poppins(
-                  fontWeight: FontWeight.bold,
-                  fontSize: 12,
-                  color: color),
-            ),
-          ),
-          title: Row(
+        return Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Expanded(
+              // ── LEADING: order number badge (fixed width) ──
+              Container(
+                width: 56,
+                padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 4),
+                decoration: BoxDecoration(
+                  color: color.withValues(alpha: 0.1),
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                alignment: Alignment.center,
                 child: Text(
-                  cachedName ?? 'Loading…',
-                  style: GoogleFonts.poppins(
-                      fontWeight: FontWeight.w600,
-                      fontSize: 14,
-                      color: cachedName == null
-                          ? Colors.grey.shade500
-                          : Colors.black87),
+                  '#${order.orderNumber}',
+                  maxLines: 1,
                   overflow: TextOverflow.ellipsis,
+                  style: GoogleFonts.poppins(
+                    fontWeight: FontWeight.bold,
+                    fontSize: 11,
+                    color: color,
+                  ),
                 ),
               ),
-              if (isCompleted)
-                Container(
-                  margin: const EdgeInsets.only(left: 6),
-                  padding: const EdgeInsets.symmetric(
-                      horizontal: 6, vertical: 2),
-                  decoration: BoxDecoration(
-                    color: green.withValues(alpha: 0.12),
-                    borderRadius: BorderRadius.circular(4),
-                  ),
-                  child: Text(
-                    'EARNED',
+              const SizedBox(width: 10),
+
+              // ── MIDDLE: name, badges, meta (takes remaining width) ──
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    // Name + status badges on their own line if needed
+                    Text(
+                      cachedName ?? 'Loading…',
+                      style: GoogleFonts.poppins(
+                        fontWeight: FontWeight.w600,
+                        fontSize: 14,
+                        color: cachedName == null
+                            ? Colors.grey.shade500
+                            : Colors.black87,
+                      ),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                    if (isCompleted || isReady)
+                      Padding(
+                        padding: const EdgeInsets.only(top: 3),
+                        child: Wrap(
+                          spacing: 4,
+                          runSpacing: 4,
+                          children: [
+                            if (isCompleted) _orderBadge('EARNED'),
+                            if (isReady)
+                              _orderBadge('QR READY', icon: Icons.qr_code_2),
+                          ],
+                        ),
+                      ),
+                    const SizedBox(height: 4),
+                    Text(
+                      '${order.formattedDateTime}  •  ${order.itemsSummary}',
+                      style: GoogleFonts.poppins(
+                          fontSize: 11, color: Colors.grey.shade600),
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      'Payment: ${order.paymentMethod}',
+                      style: GoogleFonts.poppins(
+                          fontSize: 11, color: Colors.grey.shade500),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(width: 10),
+
+              // ── TRAILING: price + status chip (kept compact) ──
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.end,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    '₱${order.total.toStringAsFixed(0)}',
                     style: GoogleFonts.poppins(
-                      fontSize: 8,
-                      fontWeight: FontWeight.bold,
-                      color: green,
+                      fontWeight: FontWeight.w700,
+                      fontSize: 14,
+                      color: isCompleted ? green : Colors.black87,
                     ),
                   ),
-                ),
-              if (isReady)
-                Container(
-                  margin: const EdgeInsets.only(left: 6),
-                  padding: const EdgeInsets.symmetric(
-                      horizontal: 6, vertical: 2),
-                  decoration: BoxDecoration(
-                    color: green.withValues(alpha: 0.12),
-                    borderRadius: BorderRadius.circular(4),
-                  ),
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Icon(Icons.qr_code_2, size: 10, color: green),
-                      const SizedBox(width: 3),
-                      Text(
-                        'QR READY',
-                        style: GoogleFonts.poppins(
-                          fontSize: 8,
-                          fontWeight: FontWeight.bold,
-                          color: green,
-                        ),
+                  const SizedBox(height: 6),
+                  if (isUpdating)
+                    const SizedBox(
+                      width: 18,
+                      height: 18,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  else if (isCompleted)
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 8, vertical: 5),
+                      decoration: BoxDecoration(
+                        color: Colors.grey.shade200,
+                        borderRadius: BorderRadius.circular(8),
+                        border: Border.all(color: Colors.grey.shade300),
                       ),
-                    ],
-                  ),
-                ),
-            ],
-          ),
-          subtitle: Padding(
-            padding: const EdgeInsets.only(top: 2),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  '${order.formattedDateTime}  •  ${order.itemsSummary}',
-                  style: GoogleFonts.poppins(
-                      fontSize: 11, color: Colors.grey.shade600),
-                  maxLines: 2,
-                  overflow: TextOverflow.ellipsis,
-                ),
-                const SizedBox(height: 2),
-                Text(
-                  'Payment: ${order.paymentMethod}',
-                  style: GoogleFonts.poppins(
-                      fontSize: 11, color: Colors.grey.shade500),
-                ),
-              ],
-            ),
-          ),
-          trailing: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Text(
-                '₱${order.total.toStringAsFixed(0)}',
-                style: GoogleFonts.poppins(
-                    fontWeight: FontWeight.w700,
-                    fontSize: 14,
-                    color: isCompleted ? green : Colors.black87),
-              ),
-              const SizedBox(width: 12),
-              if (isUpdating)
-                const SizedBox(
-                  width: 18,
-                  height: 18,
-                  child: CircularProgressIndicator(strokeWidth: 2),
-                )
-              else if (isCompleted)
-                Container(
-                  padding: const EdgeInsets.symmetric(
-                      horizontal: 10, vertical: 6),
-                  decoration: BoxDecoration(
-                    color: Colors.grey.shade200,
-                    borderRadius: BorderRadius.circular(8),
-                    border: Border.all(color: Colors.grey.shade300),
-                  ),
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Icon(Icons.lock_outline,
-                          size: 14, color: Colors.grey.shade600),
-                      const SizedBox(width: 4),
-                      Text(
-                        'Completed',
-                        style: GoogleFonts.poppins(
-                          fontSize: 12,
-                          color: Colors.grey.shade600,
-                          fontWeight: FontWeight.w600,
-                        ),
-                      ),
-                    ],
-                  ),
-                )
-              else
-                InkWell(
-                  onTap: () =>
-                      _showStatusPicker(order.id, order.status),
-                  borderRadius: BorderRadius.circular(8),
-                  child: Container(
-                    padding: const EdgeInsets.symmetric(
-                        horizontal: 10, vertical: 6),
-                    decoration: BoxDecoration(
-                      color: color.withValues(alpha: 0.15),
-                      borderRadius: BorderRadius.circular(8),
-                    ),
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Text(
-                          order.status,
-                          style: GoogleFonts.poppins(
-                            fontSize: 12,
-                            color: color,
-                            fontWeight: FontWeight.w600,
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(Icons.lock_outline,
+                              size: 13, color: Colors.grey.shade600),
+                          const SizedBox(width: 3),
+                          Text(
+                            'Completed',
+                            style: GoogleFonts.poppins(
+                              fontSize: 11,
+                              color: Colors.grey.shade600,
+                              fontWeight: FontWeight.w600,
+                            ),
                           ),
+                        ],
+                      ),
+                    )
+                  else
+                    InkWell(
+                      onTap: () => _showStatusPicker(order.id, order.status),
+                      borderRadius: BorderRadius.circular(8),
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 8, vertical: 5),
+                        decoration: BoxDecoration(
+                          color: color.withValues(alpha: 0.15),
+                          borderRadius: BorderRadius.circular(8),
                         ),
-                        const SizedBox(width: 4),
-                        Icon(Icons.expand_more, size: 16, color: color),
-                      ],
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Text(
+                              order.status,
+                              style: GoogleFonts.poppins(
+                                fontSize: 11,
+                                color: color,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                            const SizedBox(width: 3),
+                            Icon(Icons.expand_more, size: 14, color: color),
+                          ],
+                        ),
+                      ),
                     ),
-                  ),
-                ),
+                ],
+              ),
             ],
           ),
         );
@@ -1801,8 +1819,8 @@ class _CornerPainter extends CustomPainter {
 
     switch (alignment) {
       case Alignment.topLeft:
-        canvas.drawLine(Offset(0, 0), const Offset(path, 0), paint);
-        canvas.drawLine(const Offset(0, 0), Offset(0, path), paint);
+        canvas.drawLine(const Offset(0, 0), const Offset(path, 0), paint);
+        canvas.drawLine(const Offset(0, 0), const Offset(0, path), paint);
         break;
       case Alignment.topRight:
         canvas.drawLine(Offset(size.width, 0),
@@ -1969,9 +1987,16 @@ class _AdminMenuManagementPageState extends State<AdminMenuManagementPage> {
             Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
-                Text('Menu Management',
+                Expanded(
+                  child: Text(
+                    'Menu Management',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
                     style: GoogleFonts.poppins(
-                        fontSize: 24, fontWeight: FontWeight.w700)),
+                        fontSize: 24, fontWeight: FontWeight.w700),
+                  ),
+                ),
+                const SizedBox(width: 12),
                 ElevatedButton.icon(
                   onPressed: () => _showAddItemDialog(context),
                   icon: const Icon(Icons.add, size: 18),
@@ -3556,9 +3581,28 @@ class _AdminInventoryPageState extends State<AdminInventoryPage> {
   String _typeFilter = 'all';
 
   // ─────────────────────────────────────────────
+  // SMALL STOCK +/- BUTTON
+  // ─────────────────────────────────────────────
+  Widget _stockButton({required IconData icon, VoidCallback? onTap}) {
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(20),
+      child: Padding(
+        padding: const EdgeInsets.all(4),
+        child: Icon(
+          icon,
+          size: 20,
+          color: onTap == null ? Colors.grey.shade400 : Colors.grey.shade800,
+        ),
+      ),
+    );
+  }
+
+  // ─────────────────────────────────────────────
   // ADD ITEM DIALOG (ingredient OR supply)
   // ─────────────────────────────────────────────
-  void _showAddIngredientDialog({InventoryType initialType = InventoryType.ingredient}) {
+  void _showAddIngredientDialog(
+      {InventoryType initialType = InventoryType.ingredient}) {
     final nameCtrl = TextEditingController();
     final stockCtrl = TextEditingController(text: '0');
     final minCtrl = TextEditingController(text: '5');
@@ -3572,16 +3616,14 @@ class _AdminInventoryPageState extends State<AdminInventoryPage> {
           shape: RoundedRectangleBorder(
               borderRadius: BorderRadius.circular(16)),
           title: Text(
-            type == InventoryType.ingredient
-                ? 'Add Ingredient'
-                : 'Add Supply',
+            type == InventoryType.ingredient ? 'Add Ingredient' : 'Add Supply',
             style: GoogleFonts.poppins(fontWeight: FontWeight.bold),
           ),
           content: SingleChildScrollView(
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
-                // Type toggle at the top
+                // Type toggle
                 SegmentedButton<InventoryType>(
                   segments: const [
                     ButtonSegment(
@@ -3596,8 +3638,7 @@ class _AdminInventoryPageState extends State<AdminInventoryPage> {
                     ),
                   ],
                   selected: {type},
-                  onSelectionChanged: (s) =>
-                      setD(() => type = s.first),
+                  onSelectionChanged: (s) => setD(() => type = s.first),
                 ),
                 const SizedBox(height: 12),
                 TextField(
@@ -3624,8 +3665,8 @@ class _AdminInventoryPageState extends State<AdminInventoryPage> {
                 TextField(
                   controller: minCtrl,
                   keyboardType: TextInputType.number,
-                  decoration: const InputDecoration(
-                      labelText: 'Min alert level'),
+                  decoration:
+                      const InputDecoration(labelText: 'Min alert level'),
                 ),
               ],
             ),
@@ -3666,10 +3707,8 @@ class _AdminInventoryPageState extends State<AdminInventoryPage> {
   // ─────────────────────────────────────────────
   void _showEditIngredientDialog(InventoryItemModel item) {
     final nameCtrl = TextEditingController(text: item.name);
-    final stockCtrl =
-        TextEditingController(text: item.stock.toString());
-    final minCtrl =
-        TextEditingController(text: item.minLevel.toString());
+    final stockCtrl = TextEditingController(text: item.stock.toString());
+    final minCtrl = TextEditingController(text: item.minLevel.toString());
     String unit = item.unit;
     InventoryType type = item.type;
 
@@ -3699,14 +3738,12 @@ class _AdminInventoryPageState extends State<AdminInventoryPage> {
                     ),
                   ],
                   selected: {type},
-                  onSelectionChanged: (s) =>
-                      setD(() => type = s.first),
+                  onSelectionChanged: (s) => setD(() => type = s.first),
                 ),
                 const SizedBox(height: 12),
                 TextField(
                   controller: nameCtrl,
-                  decoration:
-                      const InputDecoration(labelText: 'Name'),
+                  decoration: const InputDecoration(labelText: 'Name'),
                 ),
                 const SizedBox(height: 8),
                 UnitPickerField(
@@ -3717,15 +3754,13 @@ class _AdminInventoryPageState extends State<AdminInventoryPage> {
                 TextField(
                   controller: stockCtrl,
                   keyboardType: TextInputType.number,
-                  decoration:
-                      const InputDecoration(labelText: 'Stock'),
+                  decoration: const InputDecoration(labelText: 'Stock'),
                 ),
                 const SizedBox(height: 8),
                 TextField(
                   controller: minCtrl,
                   keyboardType: TextInputType.number,
-                  decoration:
-                      const InputDecoration(labelText: 'Min level'),
+                  decoration: const InputDecoration(labelText: 'Min level'),
                 ),
               ],
             ),
@@ -3741,8 +3776,7 @@ class _AdminInventoryPageState extends State<AdminInventoryPage> {
                   'name': nameCtrl.text.trim(),
                   'unit': unit,
                   'stock': double.tryParse(stockCtrl.text) ?? item.stock,
-                  'minLevel':
-                      double.tryParse(minCtrl.text) ?? item.minLevel,
+                  'minLevel': double.tryParse(minCtrl.text) ?? item.minLevel,
                   'type': type.name,
                   'updatedAt': FieldValue.serverTimestamp(),
                 });
@@ -3772,266 +3806,389 @@ class _AdminInventoryPageState extends State<AdminInventoryPage> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // Header
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                Text('Inventory Stocks',
-                    style: GoogleFonts.poppins(
-                        fontSize: 24, fontWeight: FontWeight.w700)),
-                ElevatedButton.icon(
+            // ── HEADER ──
+            LayoutBuilder(
+              builder: (context, constraints) {
+                final isNarrow = constraints.maxWidth < 420;
+
+                final title = Text(
+                  'Inventory Stocks',
+                  style: GoogleFonts.poppins(
+                      fontSize: 24, fontWeight: FontWeight.w700),
+                );
+
+                final addButton = ElevatedButton.icon(
                   onPressed: () => _showAddIngredientDialog(
                     initialType: _typeFilter == 'supply'
                         ? InventoryType.supply
                         : InventoryType.ingredient,
                   ),
                   icon: const Icon(Icons.add, size: 18),
-                  label: Text(_typeFilter == 'supply'
-                      ? 'Add Supply'
-                      : 'Add Item'),
+                  label: Text(
+                      _typeFilter == 'supply' ? 'Add Supply' : 'Add Item'),
                   style: ElevatedButton.styleFrom(
                     backgroundColor: adminPurple,
                     foregroundColor: Colors.white,
                     shape: RoundedRectangleBorder(
                         borderRadius: BorderRadius.circular(10)),
                   ),
-                ),
-              ],
+                );
+
+                if (isNarrow) {
+                  return Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      title,
+                      const SizedBox(height: 12),
+                      SizedBox(width: double.infinity, child: addButton),
+                    ],
+                  );
+                }
+
+                return Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Expanded(child: title),
+                    const SizedBox(width: 12),
+                    addButton,
+                  ],
+                );
+              },
             ),
             const SizedBox(height: 12),
 
-            // ── TYPE FILTER ──
-            SegmentedButton<String>(
-              segments: const [
-                ButtonSegment(
-                    value: 'all',
-                    label: Text('All'),
-                    icon: Icon(Icons.list, size: 16)),
-                ButtonSegment(
-                    value: 'ingredient',
-                    label: Text('Ingredients'),
-                    icon: Icon(Icons.restaurant, size: 16)),
-                ButtonSegment(
-                    value: 'supply',
-                    label: Text('Supplies'),
-                    icon: Icon(Icons.inventory_2, size: 16)),
+            DropdownButtonFormField<String>(
+              initialValue: _typeFilter,
+              isExpanded: true,
+              decoration: InputDecoration(
+                labelText: 'Filter by type',
+                prefixIcon: const Icon(Icons.filter_list_rounded, size: 20),
+                filled: true,
+                fillColor: Colors.white,
+                contentPadding:
+                    const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(12),
+                  borderSide: BorderSide(color: Colors.grey.shade300),
+                ),
+                enabledBorder: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(12),
+                  borderSide: BorderSide(color: Colors.grey.shade300),
+                ),
+                focusedBorder: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(12),
+                  borderSide: BorderSide(color: adminPurple, width: 1.6),
+                ),
+              ),
+              items: const [
+                DropdownMenuItem(
+                  value: 'all',
+                  child: Row(
+                    children: [
+                      Icon(Icons.list, size: 18, color: Color(0xFF5E35B1)),
+                      SizedBox(width: 8),
+                      Text('All'),
+                    ],
+                  ),
+                ),
+                DropdownMenuItem(
+                  value: 'ingredient',
+                  child: Row(
+                    children: [
+                      Icon(Icons.restaurant, size: 18, color: Color(0xFF5E35B1)),
+                      SizedBox(width: 8),
+                      Text('Ingredients'),
+                    ],
+                  ),
+                ),
+                DropdownMenuItem(
+                  value: 'supply',
+                  child: Row(
+                    children: [
+                      Icon(Icons.inventory_2, size: 18, color: Color(0xFF5E35B1)),
+                      SizedBox(width: 8),
+                      Text('Supplies'),
+                    ],
+                  ),
+                ),
               ],
-              selected: {_typeFilter},
-              onSelectionChanged: (s) =>
-                  setState(() => _typeFilter = s.first),
+              onChanged: (v) {
+                if (v != null) setState(() => _typeFilter = v);
+              },
             ),
             const SizedBox(height: 16),
 
+            // ── LIST (wrapped in Material so InkWell ripples work) ──
             Expanded(
-              child: Container(
-                padding: const EdgeInsets.all(16),
-                decoration: BoxDecoration(
-                  color: Colors.white,
-                  borderRadius: BorderRadius.circular(18),
-                  border: Border.all(color: Colors.grey.shade200),
-                ),
-                child: StreamBuilder<QuerySnapshot>(
-                  stream: _inv.orderBy('name').snapshots(),
-                  builder: (context, snapshot) {
-                    if (snapshot.connectionState ==
-                        ConnectionState.waiting) {
-                      return const Center(
-                          child: CircularProgressIndicator());
-                    }
-                    if (snapshot.hasError) {
-                      return Center(
-                          child:
-                              Text('Error: ${snapshot.error}'));
-                    }
+              child: Material(
+                color: Colors.white,
+                borderRadius: BorderRadius.circular(18),
+                child: Container(
+                  padding: const EdgeInsets.all(16),
+                  decoration: BoxDecoration(
+                    borderRadius: BorderRadius.circular(18),
+                    border: Border.all(color: Colors.grey.shade200),
+                  ),
+                  child: StreamBuilder<QuerySnapshot>(
+                    stream: _inv.orderBy('name').snapshots(),
+                    builder: (context, snapshot) {
+                      if (snapshot.connectionState ==
+                          ConnectionState.waiting) {
+                        return const Center(
+                            child: CircularProgressIndicator());
+                      }
+                      if (snapshot.hasError) {
+                        return Center(
+                            child: Text('Error: ${snapshot.error}'));
+                      }
 
-                    // Parse + filter
-                    var items = (snapshot.data?.docs ?? [])
-                        .map((d) => InventoryItemModel.fromMap(
-                            d.id, d.data() as Map<String, dynamic>))
-                        .toList();
-
-                    if (_typeFilter == 'ingredient') {
-                      items = items
-                          .where((i) => i.isIngredient)
+                      // Parse + filter
+                      var items = (snapshot.data?.docs ?? [])
+                          .map((d) => InventoryItemModel.fromMap(
+                              d.id, d.data() as Map<String, dynamic>))
                           .toList();
-                    } else if (_typeFilter == 'supply') {
-                      items =
-                          items.where((i) => i.isSupply).toList();
-                    }
 
-                    if (items.isEmpty) {
-                      return Center(
-                        child: Column(
-                          mainAxisAlignment:
-                              MainAxisAlignment.center,
-                          children: [
-                            Icon(
-                              _typeFilter == 'supply'
-                                  ? Icons.inventory_2_outlined
-                                  : Icons.restaurant_menu,
-                              size: 64,
-                              color: Colors.grey.shade400,
-                            ),
-                            const SizedBox(height: 12),
-                            Text(
-                              _typeFilter == 'all'
-                                  ? 'No items yet'
-                                  : _typeFilter == 'supply'
-                                      ? 'No supplies yet'
-                                      : 'No ingredients yet',
-                              style: GoogleFonts.poppins(
-                                  color: Colors.grey.shade600),
-                            ),
-                          ],
-                        ),
-                      );
-                    }
+                      if (_typeFilter == 'ingredient') {
+                        items =
+                            items.where((i) => i.isIngredient).toList();
+                      } else if (_typeFilter == 'supply') {
+                        items = items.where((i) => i.isSupply).toList();
+                      }
 
-                    return ListView.separated(
-                      itemCount: items.length,
-                      separatorBuilder: (_, __) =>
-                          Divider(color: Colors.grey.shade100),
-                      itemBuilder: (context, index) {
-                        final item = items[index];
-                        final isLow = item.isLow;
-                        final isOut = item.isOut;
-                        final isIngredient = item.isIngredient;
-
-                        return ListTile(
-                          onTap: () =>
-                              _showEditIngredientDialog(item),
-                          leading: Container(
-                            padding: const EdgeInsets.all(8),
-                            decoration: BoxDecoration(
-                              color: isIngredient
-                                  ? const Color(0xFF5E35B1)
-                                      .withValues(alpha: 0.1)
-                                  : Colors.blue.shade50,
-                              borderRadius:
-                                  BorderRadius.circular(10),
-                            ),
-                            child: Icon(
-                              isIngredient
-                                  ? Icons.restaurant
-                                  : Icons.inventory_2,
-                              color: isIngredient
-                                  ? adminPurple
-                                  : Colors.blue.shade700,
-                              size: 20,
-                            ),
-                          ),
-                          title: Row(
+                      if (items.isEmpty) {
+                        return Center(
+                          child: Column(
+                            mainAxisAlignment: MainAxisAlignment.center,
                             children: [
-                              Flexible(
-                                child: Text(item.name,
-                                    style: GoogleFonts.poppins(
-                                        fontWeight:
-                                            FontWeight.w600),
-                                    overflow:
-                                        TextOverflow.ellipsis),
+                              Icon(
+                                _typeFilter == 'supply'
+                                    ? Icons.inventory_2_outlined
+                                    : Icons.restaurant_menu,
+                                size: 64,
+                                color: Colors.grey.shade400,
                               ),
-                              const SizedBox(width: 8),
-                              // Type badge
-                              Container(
-                                padding:
-                                    const EdgeInsets.symmetric(
-                                        horizontal: 6, vertical: 2),
-                                decoration: BoxDecoration(
-                                  color: isIngredient
-                                      ? adminPurple
-                                          .withValues(alpha: 0.1)
-                                      : Colors.blue.shade50,
-                                  borderRadius:
-                                      BorderRadius.circular(4),
-                                ),
-                                child: Text(
-                                  isIngredient ? 'ING' : 'SUP',
-                                  style: GoogleFonts.poppins(
-                                    fontSize: 9,
-                                    fontWeight: FontWeight.bold,
-                                    color: isIngredient
-                                        ? adminPurple
-                                        : Colors.blue.shade700,
-                                  ),
-                                ),
-                              ),
-                            ],
-                          ),
-                          subtitle: Text(
-                            'Min: ${item.minLevel} ${item.unit}',
-                            style: GoogleFonts.poppins(
-                                fontSize: 12,
-                                color: Colors.grey.shade600),
-                          ),
-                          trailing: Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              IconButton(
-                                icon: const Icon(
-                                    Icons.remove_circle_outline,
-                                    size: 20),
-                                onPressed: item.stock <= 0
-                                    ? null
-                                    : () =>
-                                        InventoryService.adjustStock(
-                                            item.id, -1),
-                              ),
+                              const SizedBox(height: 12),
                               Text(
-                                '${item.stock} ${item.unit}',
+                                _typeFilter == 'all'
+                                    ? 'No items yet'
+                                    : _typeFilter == 'supply'
+                                        ? 'No supplies yet'
+                                        : 'No ingredients yet',
                                 style: GoogleFonts.poppins(
-                                  fontSize: 14,
-                                  fontWeight: FontWeight.w700,
-                                  color: isOut
-                                      ? Colors.red.shade700
-                                      : isLow
-                                          ? Colors.orange.shade800
-                                          : Colors.black87,
-                                ),
-                              ),
-                              IconButton(
-                                icon: const Icon(
-                                    Icons.add_circle_outline,
-                                    size: 20),
-                                onPressed: () =>
-                                    InventoryService.adjustStock(
-                                        item.id, 1),
-                              ),
-                              const SizedBox(width: 8),
-                              Container(
-                                padding: const EdgeInsets.symmetric(
-                                    horizontal: 10, vertical: 4),
-                                decoration: BoxDecoration(
-                                  color: isOut
-                                      ? Colors.red.shade50
-                                      : isLow
-                                          ? Colors.orange.shade50
-                                          : Colors.green.shade50,
-                                  borderRadius:
-                                      BorderRadius.circular(8),
-                                ),
-                                child: Text(
-                                  isOut
-                                      ? 'OUT'
-                                      : isLow
-                                          ? 'LOW'
-                                          : 'OK',
-                                  style: GoogleFonts.poppins(
-                                    fontSize: 11,
-                                    fontWeight: FontWeight.bold,
-                                    color: isOut
-                                        ? Colors.red.shade700
-                                        : isLow
-                                            ? Colors.orange.shade800
-                                            : Colors.green.shade700,
-                                  ),
-                                ),
+                                    color: Colors.grey.shade600),
                               ),
                             ],
                           ),
                         );
-                      },
-                    );
-                  },
+                      }
+
+                      return ListView.separated(
+                        itemCount: items.length,
+                        separatorBuilder: (_, __) =>
+                            Divider(color: Colors.grey.shade100),
+                        itemBuilder: (context, index) {
+                          final item = items[index];
+                          final isLow = item.isLow;
+                          final isOut = item.isOut;
+                          final isIngredient = item.isIngredient;
+
+                          return InkWell(
+                            onTap: () =>
+                                _showEditIngredientDialog(item),
+                            borderRadius: BorderRadius.circular(12),
+                            child: Padding(
+                              padding: const EdgeInsets.symmetric(
+                                  horizontal: 8, vertical: 8),
+                              child: Row(
+                                crossAxisAlignment:
+                                    CrossAxisAlignment.start,
+                                children: [
+                                  // leading icon
+                                  Container(
+                                    padding: const EdgeInsets.all(8),
+                                    decoration: BoxDecoration(
+                                      color: isIngredient
+                                          ? adminPurple
+                                              .withValues(alpha: 0.1)
+                                          : Colors.blue.shade50,
+                                      borderRadius:
+                                          BorderRadius.circular(10),
+                                    ),
+                                    child: Icon(
+                                      isIngredient
+                                          ? Icons.restaurant
+                                          : Icons.inventory_2,
+                                      color: isIngredient
+                                          ? adminPurple
+                                          : Colors.blue.shade700,
+                                      size: 20,
+                                    ),
+                                  ),
+                                  const SizedBox(width: 10),
+
+                                  // middle: name + badge + min
+                                  Expanded(
+                                    child: Column(
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.start,
+                                      mainAxisSize: MainAxisSize.min,
+                                      children: [
+                                        Row(
+                                          children: [
+                                            Expanded(
+                                              child: Text(
+                                                item.name,
+                                                maxLines: 1,
+                                                overflow:
+                                                    TextOverflow.ellipsis,
+                                                style:
+                                                    GoogleFonts.poppins(
+                                                        fontWeight:
+                                                            FontWeight
+                                                                .w600),
+                                              ),
+                                            ),
+                                            const SizedBox(width: 6),
+                                            Container(
+                                              padding:
+                                                  const EdgeInsets
+                                                      .symmetric(
+                                                      horizontal: 6,
+                                                      vertical: 2),
+                                              decoration: BoxDecoration(
+                                                color: isIngredient
+                                                    ? adminPurple
+                                                        .withValues(
+                                                            alpha: 0.1)
+                                                    : Colors.blue.shade50,
+                                                borderRadius:
+                                                    BorderRadius.circular(
+                                                        4),
+                                              ),
+                                              child: Text(
+                                                isIngredient
+                                                    ? 'ING'
+                                                    : 'SUP',
+                                                style:
+                                                    GoogleFonts.poppins(
+                                                  fontSize: 9,
+                                                  fontWeight:
+                                                      FontWeight.bold,
+                                                  color: isIngredient
+                                                      ? adminPurple
+                                                      : Colors
+                                                          .blue.shade700,
+                                                ),
+                                              ),
+                                            ),
+                                          ],
+                                        ),
+                                        const SizedBox(height: 2),
+                                        Text(
+                                          'Min: ${item.minLevel} ${item.unit}',
+                                          maxLines: 1,
+                                          overflow: TextOverflow.ellipsis,
+                                          style: GoogleFonts.poppins(
+                                              fontSize: 12,
+                                              color: Colors.grey.shade600),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                  const SizedBox(width: 8),
+
+                                  // trailing: badge + stock controls
+                                  Column(
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.end,
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      Container(
+                                        padding: const EdgeInsets
+                                            .symmetric(
+                                            horizontal: 8, vertical: 3),
+                                        decoration: BoxDecoration(
+                                          color: isOut
+                                              ? Colors.red.shade50
+                                              : isLow
+                                                  ? Colors.orange.shade50
+                                                  : Colors.green.shade50,
+                                          borderRadius:
+                                              BorderRadius.circular(8),
+                                        ),
+                                        child: Text(
+                                          isOut
+                                              ? 'OUT'
+                                              : isLow
+                                                  ? 'LOW'
+                                                  : 'OK',
+                                          style: GoogleFonts.poppins(
+                                            fontSize: 10,
+                                            fontWeight: FontWeight.bold,
+                                            color: isOut
+                                                ? Colors.red.shade700
+                                                : isLow
+                                                    ? Colors.orange
+                                                        .shade800
+                                                    : Colors
+                                                        .green.shade700,
+                                          ),
+                                        ),
+                                      ),
+                                      const SizedBox(height: 2),
+                                      Row(
+                                        mainAxisSize: MainAxisSize.min,
+                                        children: [
+                                          _stockButton(
+                                            icon: Icons
+                                                .remove_circle_outline,
+                                            onTap: item.stock <= 0
+                                                ? null
+                                                : () => InventoryService
+                                                    .adjustStock(
+                                                        item.id, -1),
+                                          ),
+                                          Padding(
+                                            padding: const EdgeInsets
+                                                .symmetric(horizontal: 4),
+                                            child: Text(
+                                              '${item.stock} ${item.unit}',
+                                              style:
+                                                  GoogleFonts.poppins(
+                                                fontSize: 13,
+                                                fontWeight:
+                                                    FontWeight.w700,
+                                                color: isOut
+                                                    ? Colors
+                                                        .red.shade700
+                                                    : isLow
+                                                        ? Colors.orange
+                                                            .shade800
+                                                        : Colors
+                                                            .black87,
+                                              ),
+                                            ),
+                                          ),
+                                          _stockButton(
+                                            icon: Icons
+                                                .add_circle_outline,
+                                            onTap: () =>
+                                                InventoryService
+                                                    .adjustStock(
+                                                        item.id, 1),
+                                          ),
+                                        ],
+                                      ),
+                                    ],
+                                  ),
+                                ],
+                              ),
+                            ),
+                          );
+                        },
+                      );
+                    },
+                  ),
                 ),
               ),
             ),
@@ -4041,7 +4198,6 @@ class _AdminInventoryPageState extends State<AdminInventoryPage> {
     );
   }
 }
-
 
 // 5. ADMIN LOYALTY REWARDS PAGE — dynamic CRUD
 class AdminLoyaltyRewardsPage extends StatefulWidget {
