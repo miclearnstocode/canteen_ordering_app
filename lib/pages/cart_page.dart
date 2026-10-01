@@ -108,7 +108,7 @@ class _CartPageState extends State<CartPage> {
               'Insufficient credits. You have ₱${currentCredits.toStringAsFixed(2)}, need ₱${total.toStringAsFixed(2)}.');
         }
 
-        // ── Validate menu stock ──
+        // ── Phase 1: read and validate every menu item ──
         final menuSnaps = <String, DocumentSnapshot>{};
         for (final item in _state.cartItems) {
           final ref = _firestore.collection('menu_items').doc(item.id);
@@ -116,33 +116,59 @@ class _CartPageState extends State<CartPage> {
           if (!snap.exists) {
             throw Exception('${item.name} is no longer on the menu.');
           }
-          final stock = (snap.data()?['stock'] as num?)?.toInt() ?? 0;
-          if (stock < item.quantity) {
-            throw Exception(
-                'Not enough stock for ${item.name} (only $stock left).');
+          final data = snap.data() as Map<String, dynamic>;
+          final kind = (data['kind'] ?? 'madeToOrder').toString();
+
+          if (kind == 'batchCooked') {
+            final prepared =
+                (data['preparedPortions'] as num?)?.toInt() ?? 0;
+            if (prepared < item.quantity) {
+              throw Exception(
+                  'Only $prepared portion(s) of ${item.name} are ready right now.');
+            }
+          } else {
+            final stock = (data['stock'] as num?)?.toInt() ?? 0;
+            if (stock < item.quantity) {
+              throw Exception(
+                  'Not enough stock for ${item.name} (only $stock left).');
+            }
           }
           menuSnaps[item.id] = snap;
         }
 
-        // ── Deduct credits ONLY. Points are awarded on completion. ──
-        final newBalance = currentCredits - total;
+        // ── Phase 2: reserve stock / portions ──
+        for (final item in _state.cartItems) {
+          final snap = menuSnaps[item.id]!;
+          final data = snap.data() as Map<String, dynamic>;
+          final kind = (data['kind'] ?? 'madeToOrder').toString();
+          final menuRef = _firestore.collection('menu_items').doc(item.id);
 
+          if (kind == 'batchCooked') {
+            final prepared =
+                (data['preparedPortions'] as num?)?.toInt() ?? 0;
+            final remaining = prepared - item.quantity;
+            tx.update(menuRef, {
+              'preparedPortions': remaining,
+              'isAvailable': remaining > 0,
+            });
+          } else {
+            final stock = (data['stock'] as num?)?.toInt() ?? 0;
+            final remaining = stock - item.quantity;
+            tx.update(menuRef, {
+              'stock': remaining,
+              'isAvailable': remaining > 0,
+            });
+          }
+        }
+
+        // ── Phase 3: deduct credits ──
+        final newBalance = currentCredits - total;
         tx.update(userRef, {
           'credits': newBalance,
           'updatedAt': FieldValue.serverTimestamp(),
         });
 
-        // ── Reduce menu stock ──
-        for (final item in _state.cartItems) {
-          final snap = menuSnaps[item.id]!;
-          final stock = (snap.data() as Map)['stock'] as num? ?? 0;
-          tx.update(_firestore.collection('menu_items').doc(item.id), {
-            'stock': stock.toInt() - item.quantity,
-            'isAvailable': (stock.toInt() - item.quantity) > 0,
-          });
-        }
-
-        // ── Create order ──
+        // ── Phase 4: create the order ──
         final orderRef = _firestore.collection('orders').doc();
         tx.set(orderRef, {
           'orderNumber': orderRef.id.substring(0, 8).toUpperCase(),
@@ -158,14 +184,14 @@ class _CartPageState extends State<CartPage> {
           'total': total,
           'paymentMethod': 'Credits',
           'status': 'Pending',
-          'pointsEarned': 0,          // filled in when Completed
-          'pointsAwarded': false,     // flag so we never double-award
+          'pointsEarned': 0,
+          'pointsAwarded': false,
+          'inventoryDeducted': false,
           'createdAt': FieldValue.serverTimestamp(),
         });
 
-        // ── Credit transaction log ──
-        final txLogRef =
-            _firestore.collection('credit_transactions').doc();
+        // ── Phase 5: credit transaction log ──
+        final txLogRef = _firestore.collection('credit_transactions').doc();
         tx.set(txLogRef, {
           'uid': uid,
           'type': 'debit',
@@ -186,6 +212,7 @@ class _CartPageState extends State<CartPage> {
       if (mounted) setState(() => _placingOrder = false);
     }
   }
+
 
   void _snack(String msg, {bool isError = false}) {
     ScaffoldMessenger.of(context).showSnackBar(

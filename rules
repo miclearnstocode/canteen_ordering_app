@@ -1,0 +1,219 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function isAdmin() {
+      return request.auth != null &&
+             request.auth.token.email == "canteenadmin1@gmail.com";
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    // ---------- USERS ----------
+    match /users/{userId} {
+
+      // Public read (username lookup during login + admin directory).
+      allow read: if true;
+
+      // ── Student self-update ──
+      //  • cannot change role / accountStatus / points / studentId
+      //  • CAN decrease credits (spending) but NEVER increase them
+      allow update: if isSignedIn()
+          && request.auth.uid == userId
+          && request.resource.data.role == resource.data.role
+          && request.resource.data.accountStatus == resource.data.accountStatus
+          && request.resource.data.points == resource.data.points
+          && request.resource.data.credits is number
+          && request.resource.data.credits <= resource.data.credits
+          && request.resource.data.credits >= 0;
+
+      // ── Admin full edit (add credits, release accounts, change role, etc.) ──
+      allow update: if isAdmin();
+
+      // Account creation: admin / system creates pending accounts.
+      allow create: if isSignedIn();
+
+      // Only admin can delete accounts.
+      allow delete: if isAdmin();
+    }
+
+    // ---------- CANTEEN ----------
+    match /canteen/{document} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+
+    // ---------- MENU ITEMS ----------
+    // Two kinds of items, two kinds of counters:
+    //   • madeToOrder → `stock` is the plates-ready count.
+    //   • batchCooked → `preparedPortions` is the ready-to-serve count,
+    //                    and the admin can bump it via "Cook batch".
+    match /menu_items/{document} {
+
+      allow read: if isSignedIn();
+
+      // Admin: full write access (creates items, edits recipes, cooks
+      // batches, deletes items).
+      allow write: if isAdmin();
+
+      // ── Student reservation on order placement ──
+      // Made-to-order: may only DECREMENT `stock` and flip `isAvailable`.
+      allow update: if isSignedIn()
+        && request.resource.data.diff(resource.data).affectedKeys()
+             .hasOnly(['stock', 'isAvailable'])
+        && request.resource.data.stock is int
+        && request.resource.data.stock < resource.data.stock
+        && request.resource.data.stock >= 0
+        && request.resource.data.isAvailable == (request.resource.data.stock > 0);
+
+      // ── Student reservation on order placement (batch-cooked) ──
+      // Batch-cooked: may only DECREMENT `preparedPortions` and flip
+      // `isAvailable`. (The admin cooks more via the Cook batch button,
+      // which runs as an admin and bypasses this narrower rule.)
+      allow update: if isSignedIn()
+        && request.resource.data.diff(resource.data).affectedKeys()
+             .hasOnly(['preparedPortions', 'isAvailable'])
+        && request.resource.data.preparedPortions is int
+        && request.resource.data.preparedPortions < resource.data.preparedPortions
+        && request.resource.data.preparedPortions >= 0
+        && request.resource.data.isAvailable == (request.resource.data.preparedPortions > 0);
+    }
+
+    // ---------- INVENTORY ----------
+    match /inventory/{itemId} {
+      allow read: if isSignedIn();
+
+      allow create: if isAdmin()
+        && request.resource.data.name is string
+        && request.resource.data.unit is string
+        && request.resource.data.stock is number
+        && request.resource.data.stock >= 0
+        && request.resource.data.minLevel is number
+        && request.resource.data.minLevel >= 0;
+
+      allow update: if isAdmin()
+        && request.resource.data.stock is number
+        && request.resource.data.stock >= 0;
+
+      allow delete: if isAdmin();
+    }
+
+    // ---------- ORDERS ----------
+    match /orders/{orderId} {
+      allow read: if isSignedIn() &&
+        (request.auth.uid == resource.data.userId || isAdmin());
+
+      allow create: if isSignedIn()
+        && request.resource.data.userId == request.auth.uid;
+
+      allow update: if isAdmin()
+        || (isSignedIn()
+            && request.auth.uid == resource.data.userId
+            && resource.data.status == 'Pending'
+            && request.resource.data.status == 'Cancelled');
+
+      allow delete: if isAdmin();
+    }
+
+    // ---------- CREDIT TRANSACTIONS ----------
+    // Admins may log credits for ANY user, students only their own debit.
+    match /credit_transactions/{txId} {
+      allow read: if isSignedIn() &&
+        (request.auth.uid == resource.data.uid || isAdmin());
+
+      allow create: if isSignedIn()
+        && (request.resource.data.uid == request.auth.uid || isAdmin());
+
+      allow update, delete: if false;
+    }
+
+    // ---------- INVENTORY UNITS ----------
+    match /inventory_units/{unitId} {
+      allow read: if isSignedIn();
+
+      allow create: if isAdmin()
+        && request.resource.data.name is string
+        && request.resource.data.name.size() > 0
+        && request.resource.data.name.size() <= 30
+        && request.resource.data.nameLower is string;
+
+      allow update, delete: if false;
+    }
+
+    // ---------- LOYALTY REWARDS ----------
+    match /loyalty_rewards/{rewardId} {
+      allow read: if isSignedIn();
+
+      allow create: if isAdmin()
+        && request.resource.data.name is string
+        && request.resource.data.name.size() > 0
+        && request.resource.data.name.size() <= 60
+        && request.resource.data.points is int
+        && request.resource.data.points > 0
+        && request.resource.data.points <= 100000
+        && request.resource.data.isActive is bool;
+
+      allow update: if isAdmin()
+        && request.resource.data.name is string
+        && request.resource.data.name.size() > 0
+        && request.resource.data.points is int
+        && request.resource.data.points > 0
+        && request.resource.data.isActive is bool;
+
+      allow delete: if isAdmin();
+    }
+
+    // ---------- POINTS TRANSACTIONS (audit log) ----------
+    match /points_transactions/{txId} {
+      allow read: if isSignedIn() &&
+        (request.auth.uid == resource.data.uid || isAdmin());
+
+      allow create: if isAdmin();
+
+      allow create: if isSignedIn()
+        && request.resource.data.uid == request.auth.uid
+        && request.resource.data.type == 'redeem'
+        && request.resource.data.amount is int
+        && request.resource.data.amount > 0
+        && request.resource.data.balanceAfter is int
+        && request.resource.data.balanceAfter >= 0
+        && request.resource.data.rewardId is string
+        && request.resource.data.redemptionId is string
+        && request.resource.data.timestamp is timestamp;
+
+      allow update, delete: if false;
+    }
+
+    // ---------- REDEMPTIONS (reward claims) ----------
+    match /redemptions/{redemptionId} {
+      allow read: if isSignedIn()
+        && (request.auth.uid == resource.data.userId || isAdmin());
+
+      allow create: if isSignedIn()
+        && request.resource.data.userId == request.auth.uid
+        && request.resource.data.status == 'pending'
+        && request.resource.data.code is string
+        && request.resource.data.code.size() >= 6
+        && request.resource.data.code.size() <= 16
+        && request.resource.data.rewardId is string
+        && request.resource.data.rewardName is string
+        && request.resource.data.rewardName.size() > 0
+        && request.resource.data.rewardName.size() <= 60
+        && request.resource.data.pointsCost is int
+        && request.resource.data.pointsCost > 0
+        && request.resource.data.createdAt is timestamp
+        && request.resource.data.claimedAt == null
+        && request.resource.data.claimedBy == null;
+
+      allow update: if isAdmin()
+        && resource.data.status == 'pending'
+        && request.resource.data.status == 'claimed'
+        && request.resource.data.claimedBy == request.auth.uid
+        && request.resource.data.claimedAt is timestamp;
+
+      allow delete: if false;
+    }
+  }
+}

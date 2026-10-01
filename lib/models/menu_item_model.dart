@@ -1,3 +1,5 @@
+enum MenuItemKind { madeToOrder, batchCooked }
+
 class RecipeIngredient {
   final String ingredientId;
   final String ingredientName;
@@ -34,11 +36,26 @@ class MenuItemModel {
   String category;
   double price;
   String description;
+
+  /// For madeToOrder: plates the canteen can sell right now.
+  /// For batchCooked: unused — use [preparedPortions] instead.
   int stock;
+
   bool isAvailable;
-  bool isSpecial;             // ← NEW
+  bool isSpecial;
   String? imageUrl;
   List<RecipeIngredient> recipe;
+
+  // ── New fields for the two kinds ──
+  MenuItemKind kind;
+
+  /// Portions produced by one "cook batch" action. Only used for
+  /// [MenuItemKind.batchCooked].
+  int batchYield;
+
+  /// How many servings are ready to sell right now. Only used for
+  /// [MenuItemKind.batchCooked]. Decremented on each order.
+  int preparedPortions;
 
   MenuItemModel({
     required this.id,
@@ -48,10 +65,16 @@ class MenuItemModel {
     required this.description,
     required this.stock,
     this.isAvailable = true,
-    this.isSpecial = false,   // ← NEW
+    this.isSpecial = false,
     this.imageUrl,
     List<RecipeIngredient>? recipe,
+    this.kind = MenuItemKind.madeToOrder,
+    this.batchYield = 1,
+    this.preparedPortions = 0,
   }) : recipe = recipe ?? [];
+
+  bool get isMadeToOrder => kind == MenuItemKind.madeToOrder;
+  bool get isBatchCooked => kind == MenuItemKind.batchCooked;
 
   MenuItemModel copyWith({
     String? name,
@@ -60,9 +83,12 @@ class MenuItemModel {
     String? description,
     int? stock,
     bool? isAvailable,
-    bool? isSpecial,          // ← NEW
+    bool? isSpecial,
     String? imageUrl,
     List<RecipeIngredient>? recipe,
+    MenuItemKind? kind,
+    int? batchYield,
+    int? preparedPortions,
   }) {
     return MenuItemModel(
       id: id,
@@ -72,14 +98,28 @@ class MenuItemModel {
       description: description ?? this.description,
       stock: stock ?? this.stock,
       isAvailable: isAvailable ?? this.isAvailable,
-      isSpecial: isSpecial ?? this.isSpecial,   // ← NEW
+      isSpecial: isSpecial ?? this.isSpecial,
       imageUrl: imageUrl ?? this.imageUrl,
       recipe: recipe ?? this.recipe,
+      kind: kind ?? this.kind,
+      batchYield: batchYield ?? this.batchYield,
+      preparedPortions: preparedPortions ?? this.preparedPortions,
     );
   }
 
   factory MenuItemModel.fromMap(String id, Map<String, dynamic> map) {
     final rawRecipe = (map['recipe'] as List?) ?? const [];
+
+    MenuItemKind parsedKind;
+    switch ((map['kind'] ?? '').toString()) {
+      case 'batchCooked':
+        parsedKind = MenuItemKind.batchCooked;
+        break;
+      case 'madeToOrder':
+      default:
+        parsedKind = MenuItemKind.madeToOrder;
+    }
+
     return MenuItemModel(
       id: id,
       name: map['name'] ?? '',
@@ -88,12 +128,15 @@ class MenuItemModel {
       description: map['description'] ?? '',
       stock: map['stock'] ?? 0,
       isAvailable: map['isAvailable'] ?? true,
-      isSpecial: map['isSpecial'] ?? false,     // ← NEW
+      isSpecial: map['isSpecial'] ?? false,
       imageUrl: (map['image_url'] ?? map['imageUrl']) as String?,
       recipe: rawRecipe
           .whereType<Map>()
           .map((e) => RecipeIngredient.fromMap(Map<String, dynamic>.from(e)))
           .toList(),
+      kind: parsedKind,
+      batchYield: (map['batchYield'] as num?)?.toInt() ?? 1,
+      preparedPortions: (map['preparedPortions'] as num?)?.toInt() ?? 0,
     );
   }
 
@@ -105,10 +148,13 @@ class MenuItemModel {
       'description': description,
       'stock': stock,
       'isAvailable': isAvailable,
-      'isSpecial': isSpecial,                   // ← NEW
+      'isSpecial': isSpecial,
       'image_url': imageUrl,
       'imageUrl': imageUrl,
       'recipe': recipe.map((r) => r.toMap()).toList(),
+      'kind': kind.name,
+      'batchYield': batchYield,
+      'preparedPortions': preparedPortions,
     };
   }
 }

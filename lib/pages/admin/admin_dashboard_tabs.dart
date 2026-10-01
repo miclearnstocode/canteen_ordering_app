@@ -961,6 +961,10 @@ class _AdminOrdersPageState extends State<AdminOrdersPage> {
       final orderRef = _firestore.collection('orders').doc(orderId);
 
       await _firestore.runTransaction((tx) async {
+        // ═══════════════════════════════════════════════
+        // PHASE 1 — READS ONLY (no writes yet!)
+        // ═══════════════════════════════════════════════
+
         final orderSnap = await tx.get(orderRef);
         if (!orderSnap.exists) {
           throw Exception('Order no longer exists.');
@@ -969,31 +973,85 @@ class _AdminOrdersPageState extends State<AdminOrdersPage> {
         final total = (orderData['total'] as num?)?.toDouble() ?? 0;
         final userId = (orderData['userId'] ?? '').toString();
         final alreadyAwarded = orderData['pointsAwarded'] == true;
+        final alreadyDeducted = orderData['inventoryDeducted'] == true;
 
-        // ── 1. Base update ──
+        // Prepare the order update map (not applied yet).
         final orderUpdate = <String, dynamic>{
           'status': newStatus,
           'updatedAt': FieldValue.serverTimestamp(),
         };
 
-        // ── 1a. Generate a pickup token when moving INTO Ready ──
+        // 1a. Pickup token for Ready
         if (newStatus == 'Ready' && currentStatus != 'Ready') {
           orderUpdate['pickupToken'] = _generatePickupToken();
           orderUpdate['readyAt'] = FieldValue.serverTimestamp();
         }
 
-        // ── 1b. Clear the token when leaving Ready ──
+        // 1b. Clear the token when leaving Ready
         if (currentStatus == 'Ready' && newStatus != 'Ready') {
           orderUpdate['pickupToken'] = FieldValue.delete();
         }
 
-        // ── 1c. Stamp completion time + clear token on Completed ──
+        // 1c. Stamp completion + clear token
         if (newStatus == 'Completed') {
           orderUpdate['completedAt'] = FieldValue.serverTimestamp();
           orderUpdate['pickupToken'] = FieldValue.delete();
         }
 
-        // ── 2. Award points on the transition INTO Completed ──
+        // ── Inventory: collect reads + computed deltas ──
+        // Map of inventory doc → new stock value
+        final inventoryUpdates = <DocumentReference, double>{};
+
+        if (newStatus == 'Completed' &&
+            currentStatus != 'Completed' &&
+            !alreadyDeducted) {
+          final rawItems = (orderData['items'] as List?) ?? const [];
+
+          for (final raw in rawItems) {
+            if (raw is! Map) continue;
+            final menuItemId = (raw['id'] ?? '').toString();
+            final orderQty = (raw['quantity'] as num?)?.toInt() ?? 0;
+            if (menuItemId.isEmpty || orderQty <= 0) continue;
+
+            final menuRef =
+                _firestore.collection('menu_items').doc(menuItemId);
+            final menuSnap = await tx.get(menuRef);
+            if (!menuSnap.exists) continue;
+
+            final menuData = menuSnap.data()!;
+            final kind = (menuData['kind'] ?? 'madeToOrder').toString();
+            if (kind != 'madeToOrder') continue;
+
+            final recipe = (menuData['recipe'] as List?) ?? const [];
+
+            for (final r in recipe) {
+              if (r is! Map) continue;
+              final ingredientId = (r['ingredientId'] ?? '').toString();
+              final qtyPerPortion =
+                  (r['qtyPerPortion'] as num?)?.toDouble() ?? 0;
+              if (ingredientId.isEmpty || qtyPerPortion <= 0) continue;
+
+              final invRef =
+                  _firestore.collection('inventory').doc(ingredientId);
+              final invSnap = await tx.get(invRef);
+              if (!invSnap.exists) continue;
+
+              final currentStock =
+                  (invSnap.data()?['stock'] as num?)?.toDouble() ?? 0;
+              final deduct = qtyPerPortion * orderQty;
+
+              inventoryUpdates[invRef] =
+                  (inventoryUpdates[invRef] ?? currentStock) - deduct;
+            }
+          }
+          orderUpdate['inventoryDeducted'] = true;
+        }
+
+        // ── Points: collect user read + computed new balance ──
+        DocumentReference? pointsUserRef;
+        Map<String, dynamic>? pointsUserUpdate;
+        Map<String, dynamic>? pointsLogEntry;
+
         if (newStatus == 'Completed' &&
             currentStatus != 'Completed' &&
             !alreadyAwarded &&
@@ -1009,14 +1067,13 @@ class _AdminOrdersPageState extends State<AdminOrdersPage> {
                   (userSnap.data()?['points'] as num?)?.toInt() ?? 0;
               final newPoints = currentPoints + pointsEarned;
 
-              tx.update(userRef, {
+              pointsUserRef = userRef;
+              pointsUserUpdate = {
                 'points': newPoints,
                 'updatedAt': FieldValue.serverTimestamp(),
-              });
+              };
 
-              final logRef =
-                  _firestore.collection('points_transactions').doc();
-              tx.set(logRef, {
+              pointsLogEntry = {
                 'uid': userId,
                 'type': 'earn',
                 'amount': pointsEarned,
@@ -1025,7 +1082,7 @@ class _AdminOrdersPageState extends State<AdminOrdersPage> {
                     'Order #${orderData['orderNumber']} completed (₱${total.toStringAsFixed(0)})',
                 'orderId': orderId,
                 'timestamp': FieldValue.serverTimestamp(),
-              });
+              };
 
               orderUpdate['pointsEarned'] = pointsEarned;
               orderUpdate['pointsAwarded'] = true;
@@ -1036,7 +1093,11 @@ class _AdminOrdersPageState extends State<AdminOrdersPage> {
           }
         }
 
-        // ── 3. If moving OUT of Completed, refund points ──
+        // ── Refund points: collect user read ──
+        DocumentReference? refundUserRef;
+        Map<String, dynamic>? refundUserUpdate;
+        Map<String, dynamic>? refundLogEntry;
+
         if (currentStatus == 'Completed' &&
             newStatus != 'Completed' &&
             alreadyAwarded &&
@@ -1053,14 +1114,13 @@ class _AdminOrdersPageState extends State<AdminOrdersPage> {
               final newPoints =
                   (currentPoints - pointsToRefund).clamp(0, 1 << 30);
 
-              tx.update(userRef, {
+              refundUserRef = userRef;
+              refundUserUpdate = {
                 'points': newPoints,
                 'updatedAt': FieldValue.serverTimestamp(),
-              });
+              };
 
-              final logRef =
-                  _firestore.collection('points_transactions').doc();
-              tx.set(logRef, {
+              refundLogEntry = {
                 'uid': userId,
                 'type': 'refund',
                 'amount': -pointsToRefund,
@@ -1069,7 +1129,7 @@ class _AdminOrdersPageState extends State<AdminOrdersPage> {
                     'Order #${orderData['orderNumber']} reopened from Completed',
                 'orderId': orderId,
                 'timestamp': FieldValue.serverTimestamp(),
-              });
+              };
 
               orderUpdate['pointsAwarded'] = false;
               orderUpdate['pointsEarned'] = 0;
@@ -1077,7 +1137,84 @@ class _AdminOrdersPageState extends State<AdminOrdersPage> {
           }
         }
 
-        // ── 4. Write the order update ──
+        // ── Cancel: restore reserved stock / portions ──
+        final menuRestoreUpdates = <DocumentReference, Map<String, int>>{};
+
+        if (newStatus == 'Cancelled' &&
+            currentStatus != 'Cancelled' &&
+            currentStatus != 'Completed') {
+          final rawItems = (orderData['items'] as List?) ?? const [];
+
+          for (final raw in rawItems) {
+            if (raw is! Map) continue;
+            final menuItemId = (raw['id'] ?? '').toString();
+            final orderQty = (raw['quantity'] as num?)?.toInt() ?? 0;
+            if (menuItemId.isEmpty || orderQty <= 0) continue;
+
+            final menuRef =
+                _firestore.collection('menu_items').doc(menuItemId);
+            final menuSnap = await tx.get(menuRef);
+            if (!menuSnap.exists) continue;
+
+            final menuData = menuSnap.data()!;
+            final kind = (menuData['kind'] ?? 'madeToOrder').toString();
+
+            if (kind == 'batchCooked') {
+              final prepared =
+                  (menuData['preparedPortions'] as num?)?.toInt() ?? 0;
+              menuRestoreUpdates[menuRef] = {
+                'preparedPortions': prepared + orderQty,
+              };
+            } else {
+              final stock = (menuData['stock'] as num?)?.toInt() ?? 0;
+              menuRestoreUpdates[menuRef] = {
+                'stock': stock + orderQty,
+              };
+            }
+          }
+        }
+
+        // ═══════════════════════════════════════════════
+        // PHASE 2 — WRITES ONLY (no more tx.get!)
+        // ═══════════════════════════════════════════════
+
+        // 1. Inventory deduction
+        for (final entry in inventoryUpdates.entries) {
+          tx.update(entry.key, {
+            'stock': entry.value.clamp(0.0, 1 << 30),
+            'updatedAt': FieldValue.serverTimestamp(),
+          });
+        }
+
+        // 2. Points awarded
+        if (pointsUserRef != null && pointsUserUpdate != null) {
+          tx.update(pointsUserRef, pointsUserUpdate);
+        }
+        if (pointsLogEntry != null) {
+          final logRef = _firestore.collection('points_transactions').doc();
+          tx.set(logRef, pointsLogEntry);
+        }
+
+        // 3. Points refunded
+        if (refundUserRef != null && refundUserUpdate != null) {
+          tx.update(refundUserRef, refundUserUpdate);
+        }
+        if (refundLogEntry != null) {
+          final logRef = _firestore.collection('points_transactions').doc();
+          tx.set(logRef, refundLogEntry);
+        }
+
+        // 4. Cancel restore
+        for (final entry in menuRestoreUpdates.entries) {
+          final updates = <String, dynamic>{
+            'isAvailable': true,
+            'updatedAt': FieldValue.serverTimestamp(),
+          };
+          updates.addAll(entry.value.map((k, v) => MapEntry(k, v)));
+          tx.update(entry.key, updates);
+        }
+
+        // 5. Finally — the order itself
         tx.update(orderRef, orderUpdate);
       });
 
@@ -1886,24 +2023,27 @@ class _AdminMenuManagementPageState extends State<AdminMenuManagementPage> {
     final resolvedRecipe =
         await InventoryService.ensureIngredientsExist(item.recipe);
 
-    final itemWithImage = item.copyWith(
+    // ── Batch-cooked: deduct ingredients once, at creation ──
+    if (item.isBatchCooked) {
+      await InventoryService.applyRecipeStockDelta(
+        oldRecipe: const [],
+        newRecipe: resolvedRecipe,
+      );
+    }
+    // ── Made-to-order: no deduction at creation ──
+    //    Ingredients are consumed on each completed order.
+
+    final finalItem = item.copyWith(
       imageUrl: imageUrl,
       recipe: resolvedRecipe,
+      preparedPortions: item.isBatchCooked ? item.batchYield : 0,
     );
 
-    await _menuCollection.add(itemWithImage.toMap());
-
-    // Old recipe is empty → every ingredient is newly consumed.
-    await InventoryService.applyRecipeStockDelta(
-      oldRecipe: const [],
-      newRecipe: resolvedRecipe,
-    );
+    await _menuCollection.add(finalItem.toMap());
   }
 
   // ─────────────────────────────────────────────
   // UPDATE ITEM
-  // Fetches the true OLD recipe from Firestore to use as the
-  // baseline, then applies the delta.
   // ─────────────────────────────────────────────
   Future<void> _updateItem(
     String id,
@@ -1938,16 +2078,21 @@ class _AdminMenuManagementPageState extends State<AdminMenuManagementPage> {
 
     await _menuCollection.doc(id).update(itemWithImage.toMap());
 
-    debugPrint('=== MENU EDIT: RECIPE DELTA ===');
-    debugPrint(
-        'old: ${oldRecipe.map((r) => "${r.ingredientName}=${r.qtyPerPortion}${r.unit}").toList()}');
-    debugPrint(
-        'new: ${resolvedRecipe.map((r) => "${r.ingredientName}=${r.qtyPerPortion}${r.unit}").toList()}');
+    // Only reconcile ingredient stock for batch-cooked items — their
+    // recipe is what's already been consumed. Made-to-order items have
+    // no inventory attached to the recipe itself.
+    if (existingItem.isBatchCooked && updatedItem.isBatchCooked) {
+      debugPrint('=== MENU EDIT: RECIPE DELTA (batch-cooked) ===');
+      debugPrint(
+          'old: ${oldRecipe.map((r) => "${r.ingredientName}=${r.qtyPerPortion}${r.unit}").toList()}');
+      debugPrint(
+          'new: ${resolvedRecipe.map((r) => "${r.ingredientName}=${r.qtyPerPortion}${r.unit}").toList()}');
 
-    await InventoryService.applyRecipeStockDelta(
-      oldRecipe: oldRecipe,
-      newRecipe: resolvedRecipe,
-    );
+      await InventoryService.applyRecipeStockDelta(
+        oldRecipe: oldRecipe,
+        newRecipe: resolvedRecipe,
+      );
+    }
   }
 
   // ─────────────────────────────────────────────
@@ -1958,7 +2103,7 @@ class _AdminMenuManagementPageState extends State<AdminMenuManagementPage> {
   }
 
   // ─────────────────────────────────────────────
-  // TOGGLE SPECIAL (quick switch from the list)
+  // TOGGLE SPECIAL
   // ─────────────────────────────────────────────
   Future<void> _toggleSpecial(MenuItemModel item) async {
     await _menuCollection.doc(item.id).update({
@@ -2254,6 +2399,43 @@ class _AdminMenuManagementPageState extends State<AdminMenuManagementPage> {
                                       ),
                                     ),
                                   ],
+                                  if (item.isBatchCooked) ...[
+                                    const SizedBox(width: 6),
+                                    Container(
+                                      padding: const EdgeInsets
+                                          .symmetric(
+                                          horizontal: 6, vertical: 2),
+                                      decoration: BoxDecoration(
+                                        color: Colors.green.shade50,
+                                        borderRadius:
+                                            BorderRadius.circular(4),
+                                        border: Border.all(
+                                            color: Colors
+                                                .green.shade200),
+                                      ),
+                                      child: Row(
+                                        mainAxisSize: MainAxisSize.min,
+                                        children: [
+                                          Icon(Icons.soup_kitchen,
+                                              size: 10,
+                                              color: Colors
+                                                  .green.shade800),
+                                          const SizedBox(width: 2),
+                                          Text(
+                                            'BATCH',
+                                            style:
+                                                GoogleFonts.poppins(
+                                              fontSize: 8,
+                                              fontWeight:
+                                                  FontWeight.bold,
+                                              color: Colors
+                                                  .green.shade800,
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                    ),
+                                  ],
                                 ],
                               ),
                               subtitle: Column(
@@ -2261,8 +2443,10 @@ class _AdminMenuManagementPageState extends State<AdminMenuManagementPage> {
                                     CrossAxisAlignment.start,
                                 children: [
                                   Text(
-                                    '${item.category} • Stock: ${item.stock}'
-                                    '${item.recipe.isNotEmpty ? " • ${item.recipe.length} ingredient(s)" : ""}',
+                                    item.isBatchCooked
+                                        ? '${item.category} • ${item.preparedPortions} portion(s) ready'
+                                        : '${item.category} • Stock: ${item.stock}'
+                                            '${item.recipe.isNotEmpty ? " • ${item.recipe.length} ingredient(s)" : ""}',
                                     style: GoogleFonts.poppins(
                                       fontSize: 12,
                                       color: Colors.grey.shade600,
@@ -2398,6 +2582,7 @@ class _AdminMenuManagementPageState extends State<AdminMenuManagementPage> {
 
   // ─────────────────────────────────────────────
   // INGREDIENT PICKER
+  // (Now shows both ingredients AND supplies.)
   // ─────────────────────────────────────────────
   Future<Map<String, dynamic>?> _pickIngredient(
       BuildContext context) async {
@@ -2406,9 +2591,7 @@ class _AdminMenuManagementPageState extends State<AdminMenuManagementPage> {
         .orderBy('name')
         .get();
     final items = snap.docs
-        .map((d) =>
-            InventoryItemModel.fromMap(d.id, d.data()))
-        .where((i) => i.isIngredient)
+        .map((d) => InventoryItemModel.fromMap(d.id, d.data()))
         .toList();
 
     if (!context.mounted) return null;
@@ -2462,7 +2645,7 @@ class _AdminMenuManagementPageState extends State<AdminMenuManagementPage> {
                                   dense: true,
                                   title: Text(i.name),
                                   subtitle: Text(
-                                      '${i.stock} ${i.unit} in stock'),
+                                      '${i.stock} ${i.unit} • ${i.isIngredient ? "ingredient" : "supply"}'),
                                   selected: selected?.id == i.id,
                                   trailing: selected?.id == i.id
                                       ? const Icon(Icons.check,
@@ -2774,9 +2957,11 @@ class _AdminMenuManagementPageState extends State<AdminMenuManagementPage> {
     final priceController = TextEditingController();
     final stockController = TextEditingController();
     final descController = TextEditingController();
+    final batchYieldController = TextEditingController(text: '10');
     String selectedCategory = 'Meals';
     bool isAvailable = true;
     bool isSpecial = false;
+    MenuItemKind selectedKind = MenuItemKind.madeToOrder;
     XFile? selectedImage;
     bool isUploading = false;
     List<Map<String, dynamic>> recipeRows = [];
@@ -2884,6 +3069,56 @@ class _AdminMenuManagementPageState extends State<AdminMenuManagementPage> {
                   ),
                   const SizedBox(height: 16),
 
+                  // ── ITEM TYPE ──
+                  Text('Item type',
+                      style: GoogleFonts.poppins(
+                          fontWeight: FontWeight.w600, fontSize: 13)),
+                  const SizedBox(height: 6),
+                  SegmentedButton<MenuItemKind>(
+                    segments: const [
+                      ButtonSegment(
+                        value: MenuItemKind.madeToOrder,
+                        label: Text('Made to order'),
+                        icon: Icon(Icons.restaurant, size: 16),
+                      ),
+                      ButtonSegment(
+                        value: MenuItemKind.batchCooked,
+                        label: Text('Batch cooked'),
+                        icon: Icon(Icons.soup_kitchen, size: 16),
+                      ),
+                    ],
+                    selected: {selectedKind},
+                    onSelectionChanged: (s) =>
+                        setModalState(() => selectedKind = s.first),
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    selectedKind == MenuItemKind.madeToOrder
+                        ? 'Ingredients are deducted from inventory on every completed order.'
+                        : 'Ingredients are deducted once when you save. Portions are then drawn down as orders complete.',
+                    style: GoogleFonts.poppins(
+                        fontSize: 11, color: Colors.grey.shade600),
+                  ),
+
+                  // Batch yield — only for batch-cooked
+                  if (selectedKind == MenuItemKind.batchCooked) ...[
+                    const SizedBox(height: 12),
+                    TextField(
+                      controller: batchYieldController,
+                      keyboardType: TextInputType.number,
+                      decoration: InputDecoration(
+                        labelText: 'Portions per batch',
+                        hintText: 'e.g. 10',
+                        prefixIcon: const Icon(Icons.group, size: 20),
+                        border: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(10)),
+                        contentPadding: const EdgeInsets.symmetric(
+                            horizontal: 14, vertical: 12),
+                      ),
+                    ),
+                  ],
+                  const SizedBox(height: 16),
+
                   Text('Price (₱)',
                       style: GoogleFonts.poppins(
                           fontWeight: FontWeight.w600, fontSize: 13)),
@@ -2900,7 +3135,10 @@ class _AdminMenuManagementPageState extends State<AdminMenuManagementPage> {
                               horizontal: 14, vertical: 12))),
                   const SizedBox(height: 16),
 
-                  Text('Stock Quantity',
+                  Text(
+                      selectedKind == MenuItemKind.batchCooked
+                          ? 'Portions ready to sell'
+                          : 'Stock Quantity',
                       style: GoogleFonts.poppins(
                           fontWeight: FontWeight.w600, fontSize: 13)),
                   const SizedBox(height: 6),
@@ -3016,6 +3254,14 @@ class _AdminMenuManagementPageState extends State<AdminMenuManagementPage> {
                                       isAvailable: isAvailable,
                                       isSpecial: isSpecial,
                                       recipe: recipe,
+                                      kind: selectedKind,
+                                      batchYield: selectedKind ==
+                                              MenuItemKind.batchCooked
+                                          ? (int.tryParse(
+                                                  batchYieldController
+                                                      .text) ??
+                                              1)
+                                          : 1,
                                     );
                                     await _addItem(
                                         newItem, selectedImage);
@@ -3100,9 +3346,12 @@ class _AdminMenuManagementPageState extends State<AdminMenuManagementPage> {
         TextEditingController(text: item.stock.toString());
     final descController =
         TextEditingController(text: item.description);
+    final batchYieldController =
+        TextEditingController(text: item.batchYield.toString());
     String selectedCategory = item.category;
     bool isAvailable = item.isAvailable;
     bool isSpecial = item.isSpecial;
+    MenuItemKind selectedKind = item.kind;
     XFile? selectedImage;
     bool isUploading = false;
     String? existingImageUrl = item.imageUrl;
@@ -3224,6 +3473,148 @@ class _AdminMenuManagementPageState extends State<AdminMenuManagementPage> {
                       }
                     },
                   ),
+                  const SizedBox(height: 16),
+
+                  // ── ITEM TYPE ──
+                  Text('Item type',
+                      style: GoogleFonts.poppins(
+                          fontWeight: FontWeight.w600, fontSize: 13)),
+                  const SizedBox(height: 6),
+                  SegmentedButton<MenuItemKind>(
+                    segments: const [
+                      ButtonSegment(
+                        value: MenuItemKind.madeToOrder,
+                        label: Text('Made to order'),
+                        icon: Icon(Icons.restaurant, size: 16),
+                      ),
+                      ButtonSegment(
+                        value: MenuItemKind.batchCooked,
+                        label: Text('Batch cooked'),
+                        icon: Icon(Icons.soup_kitchen, size: 16),
+                      ),
+                    ],
+                    selected: {selectedKind},
+                    onSelectionChanged: (s) =>
+                        setModalState(() => selectedKind = s.first),
+                  ),
+
+                  // Batch yield — only for batch-cooked
+                  if (selectedKind == MenuItemKind.batchCooked) ...[
+                    const SizedBox(height: 12),
+                    TextField(
+                      controller: batchYieldController,
+                      keyboardType: TextInputType.number,
+                      decoration: InputDecoration(
+                        labelText: 'Portions per batch',
+                        hintText: 'e.g. 10',
+                        prefixIcon: const Icon(Icons.group, size: 20),
+                        border: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(10)),
+                        contentPadding: const EdgeInsets.symmetric(
+                            horizontal: 14, vertical: 12),
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+
+                    // ── COOK BATCH ──
+                    Container(
+                      padding: const EdgeInsets.all(12),
+                      decoration: BoxDecoration(
+                        color: Colors.green.shade50,
+                        borderRadius: BorderRadius.circular(10),
+                        border: Border.all(
+                            color: Colors.green.shade200),
+                      ),
+                      child: Row(
+                        children: [
+                          Icon(Icons.soup_kitchen,
+                              size: 20,
+                              color: Colors.green.shade800),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment:
+                                  CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  'Ready portions: ${item.preparedPortions}',
+                                  style: GoogleFonts.poppins(
+                                    fontWeight: FontWeight.w600,
+                                    fontSize: 13,
+                                    color: Colors.green.shade900,
+                                  ),
+                                ),
+                                Text(
+                                  'Cook another batch to deduct ingredients '
+                                  'and add ${item.batchYield} portions.',
+                                  style: GoogleFonts.poppins(
+                                    fontSize: 11,
+                                    color: Colors.green.shade800,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                          TextButton.icon(
+                            icon: const Icon(Icons.play_arrow,
+                                size: 16),
+                            label: const Text('Cook batch'),
+                            onPressed: () async {
+                              final confirm = await showDialog<bool>(
+                                context: context,
+                                builder: (c) => AlertDialog(
+                                  title: const Text(
+                                      'Cook a new batch?'),
+                                  content: Text(
+                                    'This will deduct the recipe ingredients '
+                                    'once and add ${item.batchYield} ready portions.',
+                                  ),
+                                  actions: [
+                                    TextButton(
+                                      onPressed: () =>
+                                          Navigator.pop(c, false),
+                                      child:
+                                          const Text('Cancel'),
+                                    ),
+                                    ElevatedButton(
+                                      onPressed: () =>
+                                          Navigator.pop(c, true),
+                                      child: const Text('Cook'),
+                                    ),
+                                  ],
+                                ),
+                              );
+                              if (confirm == true) {
+                                await InventoryService
+                                    .applyRecipeStockDelta(
+                                  oldRecipe: const [],
+                                  newRecipe: item.recipe,
+                                );
+                                await _menuCollection
+                                    .doc(item.id)
+                                    .update({
+                                  'preparedPortions':
+                                      FieldValue.increment(
+                                          item.batchYield),
+                                  'isAvailable': true,
+                                });
+                                if (context.mounted) {
+                                  ScaffoldMessenger.of(context)
+                                      .showSnackBar(SnackBar(
+                                    content: Text(
+                                        'Cooked ${item.batchYield} portions of "${item.name}"'),
+                                    backgroundColor:
+                                        Colors.green.shade700,
+                                  ));
+                                  Navigator.pop(context);
+                                }
+                              }
+                            },
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
                   const SizedBox(height: 16),
 
                   Text('Price (₱)',
@@ -3350,6 +3741,14 @@ class _AdminMenuManagementPageState extends State<AdminMenuManagementPage> {
                                       isSpecial: isSpecial,
                                       imageUrl: existingImageUrl,
                                       recipe: recipe,
+                                      kind: selectedKind,
+                                      batchYield: selectedKind ==
+                                              MenuItemKind.batchCooked
+                                          ? (int.tryParse(
+                                                  batchYieldController
+                                                      .text) ??
+                                              item.batchYield)
+                                          : item.batchYield,
                                     );
 
                                     await _updateItem(item.id,
