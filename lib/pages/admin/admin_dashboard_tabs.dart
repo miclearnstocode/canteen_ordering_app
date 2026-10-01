@@ -621,6 +621,7 @@ class _AdminOrdersPageState extends State<AdminOrdersPage> {
             .toUpperCase();
 
     final confirmed = await showDialog<bool>(
+      // ignore: use_build_context_synchronously
       context: context,
       builder: (ctx) => AlertDialog(
         shape:
@@ -895,6 +896,7 @@ class _AdminOrdersPageState extends State<AdminOrdersPage> {
     }
 
     final confirmed = await showDialog<bool>(
+      // ignore: use_build_context_synchronously
       context: context,
       builder: (ctx) => AlertDialog(
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
@@ -4331,6 +4333,7 @@ class _AdminLoyaltyRewardsPageState extends State<AdminLoyaltyRewardsPage> {
                       } catch (e) {
                         setD(() => saving = false);
                         if (ctx.mounted) {
+                          // ignore: use_build_context_synchronously
                           ScaffoldMessenger.of(context)
                               .showSnackBar(SnackBar(
                             content: Text('Failed: $e'),

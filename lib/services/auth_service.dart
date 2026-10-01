@@ -2,15 +2,27 @@
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:google_sign_in/google_sign_in.dart';
-import 'package:flutter/foundation.dart' show kIsWeb;
+import 'package:flutter/foundation.dart' show kIsWeb, debugPrint;
 import '../models/user_model.dart';
 
 class AuthService {
   final FirebaseAuth _auth = FirebaseAuth.instance;
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
 
-  // Only initialize GoogleSignIn on mobile platforms (not web)
-  final GoogleSignIn? _googleSignIn = kIsWeb ? null : GoogleSignIn();
+  /// GoogleSignIn.instance is a singleton in v7 — no constructor.
+  /// On web we still use signInWithPopup through Firebase, so we
+  /// only need this on mobile.
+  final GoogleSignIn _googleSignIn = GoogleSignIn.instance;
+
+  bool _googleInitialized = false;
+
+  /// Initialize GoogleSignIn once, only on mobile.
+  /// Calling initialize() on web without a clientId will hang.
+  Future<void> _ensureGoogleInitialized() async {
+    if (kIsWeb || _googleInitialized) return;
+    await _googleSignIn.initialize();
+    _googleInitialized = true;
+  }
 
   // Stream of auth state changes
   Stream<User?> get authStateChanges => _auth.authStateChanges();
@@ -37,16 +49,14 @@ class AuthService {
   // Sign in with username OR email
   Future<AppUser?> signInWithUser(String userIdentifier, String password) async {
     try {
-      // Check if the identifier is an email or username
-      final bool isEmail = userIdentifier.contains('@') && userIdentifier.contains('.');
+      final bool isEmail =
+          userIdentifier.contains('@') && userIdentifier.contains('.');
 
       String email;
 
       if (isEmail) {
-        // It's an email, use it directly
         email = userIdentifier;
       } else {
-        // It's a username, look up the email
         final query = await _firestore
             .collection('users')
             .where('username', isEqualTo: userIdentifier)
@@ -65,7 +75,6 @@ class AuthService {
         throw Exception('User email not found. Please contact support.');
       }
 
-      // Sign in with Firebase Auth using email and password
       final userCredential = await _auth.signInWithEmailAndPassword(
         email: email,
         password: password,
@@ -74,8 +83,7 @@ class AuthService {
       final user = userCredential.user;
       if (user != null) {
         await _updateLastLogin(user.uid);
-        final userData = await getCurrentUserData();
-        return userData;
+        return await getCurrentUserData();
       }
       return null;
     } on FirebaseAuthException catch (e) {
@@ -114,7 +122,6 @@ class AuthService {
     UserRole role,
   ) async {
     try {
-      // Check if username is already taken
       final existingUser = await _firestore
           .collection('users')
           .where('username', isEqualTo: username)
@@ -161,47 +168,69 @@ class AuthService {
 
   // Sign in with Google
   Future<AppUser?> signInWithGoogle() async {
-    if (_googleSignIn == null && !kIsWeb) {
-      throw Exception('Google Sign-In is not available on this platform.');
-    }
-
     try {
-      final GoogleSignInAccount? googleUser;
+      final GoogleSignInAccount googleUser;
 
       if (kIsWeb) {
-        final GoogleSignIn googleSignIn = GoogleSignIn();
-        googleUser = await googleSignIn.signIn();
-      } else {
-        googleUser = await _googleSignIn!.signIn();
+        final googleProvider = GoogleAuthProvider();
+        googleProvider.setCustomParameters({'prompt': 'select_account'});
+        final userCredential = await _auth.signInWithPopup(googleProvider);
+        final user = userCredential.user;
+        if (user == null) return null;
+        return await _handleGoogleUser(user);
       }
 
-      if (googleUser == null) {
-        return null;
-      }
+      // ── Mobile flow ──
+      await _ensureGoogleInitialized();
 
-      final GoogleSignInAuthentication googleAuth = await googleUser.authentication;
+      // 1. Authenticate (replaces signIn() in v7)
+      final account = await _googleSignIn.authenticate();
+      googleUser = account;
 
+      // 2. Authorize to get an access token (v7 no longer returns it
+      //    from authentication)
+      final authorization =
+          await googleUser.authorizationClient.authorizationForScopes(
+        ['email', 'profile'],
+      ) ??
+              await googleUser.authorizationClient.authorizeScopes(
+                ['email', 'profile'],
+              );
+
+      // 3. Get the ID token from the authentication object
+      final idToken = googleUser.authentication.idToken;
+
+      // 4. Build the Firebase credential
       final credential = GoogleAuthProvider.credential(
-        accessToken: googleAuth.accessToken,
-        idToken: googleAuth.idToken,
+        accessToken: authorization.accessToken,
+        idToken: idToken,
       );
 
       final userCredential = await _auth.signInWithCredential(credential);
       final user = userCredential.user;
-
-      if (user != null) {
-        final doc = await _firestore.collection('users').doc(user.uid).get();
-        if (!doc.exists) {
-          await _createUserDocument(user);
-        } else {
-          await _updateLastLogin(user.uid);
-        }
-        return await getCurrentUserData();
+      if (user == null) return null;
+      return await _handleGoogleUser(user);
+    } on GoogleSignInException catch (e) {
+      // User cancelled or other Google-specific error
+      debugPrint('GoogleSignInException: ${e.code} ${e.description}');
+      if (e.code == GoogleSignInExceptionCode.canceled) {
+        return null;
       }
-      return null;
+      throw Exception('Google sign-in failed: ${e.description ?? e.code}');
     } catch (e) {
       rethrow;
     }
+  }
+
+  // Shared post-sign-in handling for both web & mobile
+  Future<AppUser?> _handleGoogleUser(User user) async {
+    final doc = await _firestore.collection('users').doc(user.uid).get();
+    if (!doc.exists) {
+      await _createUserDocument(user);
+    } else {
+      await _updateLastLogin(user.uid);
+    }
+    return await getCurrentUserData();
   }
 
   // Create user document
@@ -243,7 +272,7 @@ class AuthService {
           'isActive': false,
         });
       }
-      if (!kIsWeb && _googleSignIn != null) {
+      if (!kIsWeb && _googleInitialized) {
         await _googleSignIn.signOut();
       }
       await _auth.signOut();

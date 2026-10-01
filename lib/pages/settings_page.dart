@@ -27,7 +27,6 @@ class _SettingsPageState extends State<SettingsPage> {
   bool _isSaving = false;
   bool _isLoading = true;
   String? _error;
-  AppUser? _user;
   String? _avatarUrl;
 
   @override
@@ -62,7 +61,6 @@ class _SettingsPageState extends State<SettingsPage> {
         return;
       }
       setState(() {
-        _user = user;
         _nameController.text = user.displayName ?? user.username ?? '';
         _studentIdController.text = user.studentId ?? '';
         _sectionController.text = user.course ?? '';
