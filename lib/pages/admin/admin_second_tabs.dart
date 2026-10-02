@@ -24,10 +24,13 @@ class _AdminRedemptionPageState extends State<AdminRedemptionPage> {
 
   final _codeController = TextEditingController();
 
-  // ── Filter: 'all' | 'pending' | 'claimed'
+  /// Filter: 'all' | 'pending' | 'claimed'
   String _filter = 'all';
 
-  // Cache: uid -> display name
+  /// True while _verifyAndClaim is running (prevents double submits).
+  bool _verifying = false;
+
+  /// Cache: uid -> display name
   final Map<String, String> _nameCache = {};
   final Set<String> _loadingNames = {};
 
@@ -37,6 +40,8 @@ class _AdminRedemptionPageState extends State<AdminRedemptionPage> {
     super.dispose();
   }
 
+  /// Fast, non-blocking lookup that returns the cached name if available.
+  /// Kicks off a fetch in the background when it isn't.
   String? _nameFor(String uid) {
     if (uid.isEmpty) return 'Unknown';
     if (_nameCache.containsKey(uid)) return _nameCache[uid];
@@ -63,6 +68,27 @@ class _AdminRedemptionPageState extends State<AdminRedemptionPage> {
     return null;
   }
 
+  /// Blocking fetch used inside _verifyAndClaim so we always have a name
+  /// before showing the confirmation dialog.
+  Future<String> _resolveName(String uid) async {
+    if (uid.isEmpty) return 'Unknown';
+    if (_nameCache.containsKey(uid)) return _nameCache[uid]!;
+    try {
+      final doc = await _firestore.collection('users').doc(uid).get();
+      final data = doc.data();
+      final name =
+          (data?['displayName'] ?? data?['username'] ?? 'Unknown Student')
+              .toString();
+      _nameCache[uid] = name;
+      _loadingNames.remove(uid);
+      return name;
+    } catch (_) {
+      _nameCache[uid] = 'Unknown Student';
+      _loadingNames.remove(uid);
+      return 'Unknown Student';
+    }
+  }
+
   String _formatDateTime(DateTime? dt) {
     if (dt == null) return '—';
     final local = dt.toLocal();
@@ -74,6 +100,18 @@ class _AdminRedemptionPageState extends State<AdminRedemptionPage> {
     final ampm = local.hour >= 12 ? 'PM' : 'AM';
     final min = local.minute.toString().padLeft(2, '0');
     return '${months[local.month - 1]} ${local.day}, $h12:$min $ampm';
+  }
+
+  String _relativeAge(DateTime? dt) {
+    if (dt == null) return '';
+    final diff = DateTime.now().difference(dt);
+    if (diff.inMinutes < 60) {
+      return '${diff.inMinutes}m ago';
+    } else if (diff.inHours < 24) {
+      return '${diff.inHours}h ago';
+    } else {
+      return '${diff.inDays}d ago';
+    }
   }
 
   // ─────────────────────────────────────────────
@@ -106,6 +144,9 @@ class _AdminRedemptionPageState extends State<AdminRedemptionPage> {
   // VERIFY + CLAIM
   // ─────────────────────────────────────────────
   Future<void> _verifyAndClaim(String code) async {
+    if (_verifying) return;
+    setState(() => _verifying = true);
+
     try {
       final snap = await _firestore
           .collection('redemptions')
@@ -123,17 +164,19 @@ class _AdminRedemptionPageState extends State<AdminRedemptionPage> {
       final status = (data['status'] ?? 'pending').toString();
 
       if (status != 'pending') {
-        _feedback(
-          'This reward has already been claimed.',
-          isError: true,
-        );
+        _feedback('This reward has already been claimed.', isError: true);
         return;
       }
 
       final userId = (data['userId'] ?? '').toString();
       final rewardName = (data['rewardName'] ?? 'Reward').toString();
       final pointsCost = (data['pointsCost'] as num?)?.toInt() ?? 0;
-      final studentName = _nameFor(userId) ?? 'Loading…';
+
+      // Resolve the student's name before showing the dialog so the
+      // admin sees a real name, not "Loading…".
+      final studentName = await _resolveName(userId);
+
+      if (!mounted) return;
 
       final confirmed = await showDialog<bool>(
         context: context,
@@ -207,7 +250,6 @@ class _AdminRedemptionPageState extends State<AdminRedemptionPage> {
 
       if (confirmed != true) return;
 
-      // Atomic flip: only mark claimed if still pending.
       final adminUid = FirebaseAuth.instance.currentUser?.uid;
       if (adminUid == null) {
         _feedback('Admin session expired. Please log in again.',
@@ -215,6 +257,7 @@ class _AdminRedemptionPageState extends State<AdminRedemptionPage> {
         return;
       }
 
+      // Atomic flip: only mark claimed if still pending.
       await _firestore.runTransaction((tx) async {
         final freshSnap = await tx.get(doc.reference);
         if (!freshSnap.exists) {
@@ -237,6 +280,8 @@ class _AdminRedemptionPageState extends State<AdminRedemptionPage> {
     } catch (e) {
       _feedback(e.toString().replaceFirst('Exception: ', ''),
           isError: true);
+    } finally {
+      if (mounted) setState(() => _verifying = false);
     }
   }
 
@@ -353,7 +398,7 @@ class _AdminRedemptionPageState extends State<AdminRedemptionPage> {
                   SizedBox(
                     width: double.infinity,
                     child: ElevatedButton.icon(
-                      onPressed: _openScanner,
+                      onPressed: _verifying ? null : _openScanner,
                       icon: const Icon(Icons.qr_code_scanner, size: 18),
                       label: Text('Scan Reward QR',
                           style: GoogleFonts.poppins(
@@ -382,6 +427,7 @@ class _AdminRedemptionPageState extends State<AdminRedemptionPage> {
                           controller: _codeController,
                           textCapitalization:
                               TextCapitalization.characters,
+                          enabled: !_verifying,
                           decoration: InputDecoration(
                             hintText: 'e.g. RW-7K3M9Q',
                             prefixIcon: const Icon(
@@ -397,7 +443,7 @@ class _AdminRedemptionPageState extends State<AdminRedemptionPage> {
                       ),
                       const SizedBox(width: 12),
                       ElevatedButton(
-                        onPressed: _verifyCodeManually,
+                        onPressed: _verifying ? null : _verifyCodeManually,
                         style: ElevatedButton.styleFrom(
                           backgroundColor: green,
                           foregroundColor: Colors.white,
@@ -406,7 +452,16 @@ class _AdminRedemptionPageState extends State<AdminRedemptionPage> {
                           shape: RoundedRectangleBorder(
                               borderRadius: BorderRadius.circular(10)),
                         ),
-                        child: const Text('Verify'),
+                        child: _verifying
+                            ? const SizedBox(
+                                width: 16,
+                                height: 16,
+                                child: CircularProgressIndicator(
+                                  color: Colors.white,
+                                  strokeWidth: 2,
+                                ),
+                              )
+                            : const Text('Verify'),
                       ),
                     ],
                   ),
@@ -418,7 +473,11 @@ class _AdminRedemptionPageState extends State<AdminRedemptionPage> {
             // ── Pending Claims section ──
             const _PendingClaimsHeader(),
             const SizedBox(height: 10),
-            _PendingClaimsList(nameFor: _nameFor, onClaim: _verifyAndClaim),
+            _PendingClaimsList(
+              nameFor: _nameFor,
+              relativeAge: _relativeAge,
+              onClaim: _verifyAndClaim,
+            ),
             const SizedBox(height: 24),
 
             // ── Recent Redemptions ──
@@ -429,7 +488,6 @@ class _AdminRedemptionPageState extends State<AdminRedemptionPage> {
                       style: GoogleFonts.poppins(
                           fontSize: 18, fontWeight: FontWeight.w700)),
                 ),
-                // Filter dropdown
                 SizedBox(
                   width: 160,
                   child: DropdownButtonFormField<String>(
@@ -454,8 +512,7 @@ class _AdminRedemptionPageState extends State<AdminRedemptionPage> {
                       ),
                     ),
                     items: const [
-                      DropdownMenuItem(
-                          value: 'all', child: Text('All')),
+                      DropdownMenuItem(value: 'all', child: Text('All')),
                       DropdownMenuItem(
                           value: 'pending', child: Text('Pending')),
                       DropdownMenuItem(
@@ -591,7 +648,8 @@ class _AdminRedemptionPageState extends State<AdminRedemptionPage> {
                       ),
                     )
                   : TextButton(
-                      onPressed: () => _verifyAndClaim(code),
+                      onPressed:
+                          _verifying ? null : () => _verifyAndClaim(code),
                       style: TextButton.styleFrom(
                         foregroundColor: green,
                         padding: const EdgeInsets.symmetric(
@@ -664,10 +722,12 @@ class _PendingClaimsHeader extends StatelessWidget {
 class _PendingClaimsList extends StatelessWidget {
   const _PendingClaimsList({
     required this.nameFor,
+    required this.relativeAge,
     required this.onClaim,
   });
 
   final String? Function(String uid) nameFor;
+  final String Function(DateTime?) relativeAge;
   final Future<void> Function(String code) onClaim;
 
   @override
@@ -706,12 +766,16 @@ class _PendingClaimsList extends StatelessWidget {
                   (data['rewardName'] ?? 'Reward').toString();
               final pointsCost =
                   (data['pointsCost'] as num?)?.toInt() ?? 0;
+              final userId = (data['userId'] ?? '').toString();
+              final createdAt =
+                  (data['createdAt'] as Timestamp?)?.toDate();
+              final cachedName = nameFor(userId);
 
               return ListTile(
                 leading: Container(
                   padding: const EdgeInsets.all(8),
                   decoration: BoxDecoration(
-                    color: const Color(0xFFFFE082).withValues(alpha: 0.6),
+                    color: const Color(0xFFF9A825).withValues(alpha: 0.15),
                     shape: BoxShape.circle,
                   ),
                   child: const Icon(Icons.card_giftcard,
@@ -722,14 +786,35 @@ class _PendingClaimsList extends StatelessWidget {
                   style: GoogleFonts.poppins(
                       fontWeight: FontWeight.w600, fontSize: 13),
                 ),
-                subtitle: Text(
-                  'Ref: $code • $pointsCost pts',
-                  style: GoogleFonts.poppins(
-                      fontSize: 11, color: Colors.grey.shade700),
+                subtitle: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Ref: $code • $pointsCost pts',
+                      style: GoogleFonts.poppins(
+                          fontSize: 11, color: Colors.grey.shade700),
+                    ),
+                    if (cachedName != null)
+                      Text(
+                        cachedName,
+                        style: GoogleFonts.poppins(
+                            fontSize: 11,
+                            color: Colors.grey.shade600,
+                            fontWeight: FontWeight.w500),
+                      ),
+                    if (createdAt != null)
+                      Text(
+                        'Pending ${relativeAge(createdAt)}',
+                        style: GoogleFonts.poppins(
+                            fontSize: 10,
+                            color: const Color(0xFFE65100),
+                            fontWeight: FontWeight.w600),
+                      ),
+                  ],
                 ),
+                isThreeLine: true,
                 trailing: TextButton(
                   onPressed: () {
-                    // Find and verify through the parent state
                     final state = context
                         .findAncestorStateOfType<_AdminRedemptionPageState>();
                     state?._verifyAndClaim(code);

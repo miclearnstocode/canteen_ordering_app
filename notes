@@ -1,0 +1,5 @@
+flutter clean
+flutter pub get
+flutter build apk --release
+adb uninstall com.canteen_ordering_app
+adb install -r "build\app\outputs\flutter-apk\app-release.apk"

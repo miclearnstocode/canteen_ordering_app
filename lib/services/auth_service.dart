@@ -47,52 +47,98 @@ class AuthService {
   }
 
   // Sign in with username OR email
-  Future<AppUser?> signInWithUser(String userIdentifier, String password) async {
-    try {
-      final bool isEmail =
-          userIdentifier.contains('@') && userIdentifier.contains('.');
+  Future<AppUser?> signInWithUser(
+      String userIdentifier, String password) async {
+    final identifier = userIdentifier.trim();
+    if (identifier.isEmpty) {
+      throw Exception('Please enter your email, username, or student ID.');
+    }
 
+    try {
+      // ── Step 1: Figure out the account email ──
       String email;
 
-      if (isEmail) {
-        email = userIdentifier;
+      final bool looksLikeEmail =
+          identifier.contains('@') && identifier.contains('.');
+
+      if (looksLikeEmail) {
+        // Normalize to lowercase so "Juan@x.com" also matches "juan@x.com".
+        email = identifier.toLowerCase();
       } else {
-        final query = await _firestore
+        // Search by username OR studentId. Firestore can't OR across fields
+        // in a single query, so we run both and take the first hit.
+        final byUsername = await _firestore
             .collection('users')
-            .where('username', isEqualTo: userIdentifier)
+            .where('username', isEqualTo: identifier)
             .limit(1)
             .get();
 
-        if (query.docs.isEmpty) {
-          throw Exception('No account found with username "$userIdentifier"');
-        }
+        if (byUsername.docs.isNotEmpty) {
+          email = (byUsername.docs.first.data()['email'] ?? '').toString();
+        } else {
+          // Try studentId
+          final byStudentId = await _firestore
+              .collection('users')
+              .where('studentId', isEqualTo: identifier)
+              .limit(1)
+              .get();
 
-        final userData = query.docs.first.data();
-        email = userData['email'] ?? '';
+          if (byStudentId.docs.isEmpty) {
+            throw Exception(
+                'No account found with "$identifier". Check your email, username, or student ID.');
+          }
+          email = (byStudentId.docs.first.data()['email'] ?? '').toString();
+        }
       }
 
       if (email.isEmpty) {
-        throw Exception('User email not found. Please contact support.');
+        throw Exception(
+            'This account has no email on file. Please contact the canteen admin.');
       }
 
+      // ── Step 2: Authenticate with the resolved email ──
       final userCredential = await _auth.signInWithEmailAndPassword(
         email: email,
         password: password,
       );
 
       final user = userCredential.user;
-      if (user != null) {
-        await _updateLastLogin(user.uid);
-        return await getCurrentUserData();
+      if (user == null) return null;
+
+      // ── Step 3: Check account status before letting them through ──
+      // Pending accounts created by the admin are not yet allowed in.
+      final userDoc =
+          await _firestore.collection('users').doc(user.uid).get();
+      final data = userDoc.data() ?? {};
+      final status = (data['accountStatus'] ?? 'active').toString();
+
+      if (status == 'pending') {
+        // Sign them out so they don't hold a half-authenticated session.
+        await _auth.signOut();
+        throw Exception(
+            'Your account is pending release. Please inquire at the canteen counter.');
       }
-      return null;
+      if (status == 'suspended') {
+        await _auth.signOut();
+        throw Exception(
+            'Your account has been suspended. Please contact the canteen admin.');
+      }
+
+      // ── Step 4: Update the login timestamp and return the profile ──
+      await _updateLastLogin(user.uid);
+      return await getCurrentUserData();
     } on FirebaseAuthException catch (e) {
       if (e.code == 'user-not-found' || e.code == 'wrong-password') {
-        throw Exception('Invalid username/email or password.');
+        throw Exception('Invalid email/username/student ID or password.');
+      }
+      if (e.code == 'invalid-email') {
+        throw Exception('That email address looks invalid.');
+      }
+      if (e.code == 'too-many-requests') {
+        throw Exception(
+            'Too many failed attempts. Please wait a few minutes and try again.');
       }
       throw Exception('Login failed: ${e.message}');
-    } catch (e) {
-      rethrow;
     }
   }
 

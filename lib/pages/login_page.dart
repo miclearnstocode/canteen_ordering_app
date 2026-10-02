@@ -106,12 +106,12 @@ class _LoginPageState extends State<LoginPage> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text('Username or Email', style: GoogleFonts.inter(fontSize: 14, fontWeight: FontWeight.w600, color: Colors.grey[800])),
+                    Text('Username or Student ID', style: GoogleFonts.inter(fontSize: 14, fontWeight: FontWeight.w600, color: Colors.grey[800])),
                     const SizedBox(height: 8),
                     TextFormField(
                       controller: _userController,
                       decoration: InputDecoration(
-                        hintText: 'Enter your username or email',
+                        hintText: 'Enter your username or student ID',
                         prefixIcon: const Icon(Icons.person_outline, color: Colors.grey),
                         border: OutlineInputBorder(
                           borderRadius: BorderRadius.circular(14),
@@ -121,7 +121,7 @@ class _LoginPageState extends State<LoginPage> {
                         fillColor: Colors.grey.shade50,
                       ),
                       validator: (value) {
-                        if (value == null || value.isEmpty) return 'Please enter your username or email';
+                        if (value == null || value.isEmpty) return 'Please enter your username or student ID';
                         return null;
                       },
                     ),

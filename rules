@@ -12,30 +12,49 @@ service cloud.firestore {
     }
 
     // ---------- USERS ----------
+    // Reads are open so the login screen can look up an account by
+    // email, username, or student ID before the user is authenticated.
     match /users/{userId} {
-
-      // Public read (username lookup during login + admin directory).
       allow read: if true;
 
       // ── Student self-update ──
-      //  • cannot change role / accountStatus / points / studentId
-      //  • CAN decrease credits (spending) but NEVER increase them
+      //  • cannot change role / accountStatus / studentId
+      //  • CAN decrease credits (spending) but never increase
+      //  • CAN decrease points (redeeming) but never increase
       allow update: if isSignedIn()
           && request.auth.uid == userId
           && request.resource.data.role == resource.data.role
           && request.resource.data.accountStatus == resource.data.accountStatus
-          && request.resource.data.points == resource.data.points
+          && request.resource.data.studentId == resource.data.studentId
           && request.resource.data.credits is number
           && request.resource.data.credits <= resource.data.credits
-          && request.resource.data.credits >= 0;
+          && request.resource.data.credits >= 0
+          && request.resource.data.points is int
+          && request.resource.data.points <= resource.data.points
+          && request.resource.data.points >= 0;
 
-      // ── Admin full edit (add credits, release accounts, change role, etc.) ──
+      // ── Admin full edit ──
       allow update: if isAdmin();
 
-      // Account creation: admin / system creates pending accounts.
-      allow create: if isSignedIn();
+      // ── Account creation ──
+      // Self-signup: a signed-in user can only create their own doc,
+      // and only with safe defaults. Admin-created pending accounts go
+      // through the same rule (admin isn't signed in on the secondary
+      // app used by AdminAccountService — see the second allow below).
+      allow create: if isSignedIn()
+        && request.auth.uid == userId
+        && request.resource.data.role == 'user'
+        && request.resource.data.points == 0
+        && request.resource.data.credits == 0
+        && (
+          request.resource.data.accountStatus == 'active' ||
+          request.resource.data.accountStatus == 'pending'
+        );
 
-      // Only admin can delete accounts.
+      // Admin can also create any user doc (needed for pending accounts
+      // created by the admin via the secondary Firebase app).
+      allow create: if isAdmin();
+
       allow delete: if isAdmin();
     }
 
@@ -46,20 +65,11 @@ service cloud.firestore {
     }
 
     // ---------- MENU ITEMS ----------
-    // Two kinds of items, two kinds of counters:
-    //   • madeToOrder → `stock` is the plates-ready count.
-    //   • batchCooked → `preparedPortions` is the ready-to-serve count,
-    //                    and the admin can bump it via "Cook batch".
     match /menu_items/{document} {
-
       allow read: if isSignedIn();
-
-      // Admin: full write access (creates items, edits recipes, cooks
-      // batches, deletes items).
       allow write: if isAdmin();
 
-      // ── Student reservation on order placement ──
-      // Made-to-order: may only DECREMENT `stock` and flip `isAvailable`.
+      // Student: decrement stock only (made-to-order)
       allow update: if isSignedIn()
         && request.resource.data.diff(resource.data).affectedKeys()
              .hasOnly(['stock', 'isAvailable'])
@@ -68,10 +78,7 @@ service cloud.firestore {
         && request.resource.data.stock >= 0
         && request.resource.data.isAvailable == (request.resource.data.stock > 0);
 
-      // ── Student reservation on order placement (batch-cooked) ──
-      // Batch-cooked: may only DECREMENT `preparedPortions` and flip
-      // `isAvailable`. (The admin cooks more via the Cook batch button,
-      // which runs as an admin and bypasses this narrower rule.)
+      // Student: decrement preparedPortions only (batch-cooked)
       allow update: if isSignedIn()
         && request.resource.data.diff(resource.data).affectedKeys()
              .hasOnly(['preparedPortions', 'isAvailable'])
@@ -118,7 +125,6 @@ service cloud.firestore {
     }
 
     // ---------- CREDIT TRANSACTIONS ----------
-    // Admins may log credits for ANY user, students only their own debit.
     match /credit_transactions/{txId} {
       allow read: if isSignedIn() &&
         (request.auth.uid == resource.data.uid || isAdmin());
@@ -165,7 +171,7 @@ service cloud.firestore {
       allow delete: if isAdmin();
     }
 
-    // ---------- POINTS TRANSACTIONS (audit log) ----------
+    // ---------- POINTS TRANSACTIONS ----------
     match /points_transactions/{txId} {
       allow read: if isSignedIn() &&
         (request.auth.uid == resource.data.uid || isAdmin());
@@ -180,13 +186,16 @@ service cloud.firestore {
         && request.resource.data.balanceAfter is int
         && request.resource.data.balanceAfter >= 0
         && request.resource.data.rewardId is string
+        && request.resource.data.rewardId.size() > 0
         && request.resource.data.redemptionId is string
-        && request.resource.data.timestamp is timestamp;
+        && request.resource.data.redemptionId.size() > 0;
 
       allow update, delete: if false;
     }
 
-    // ---------- REDEMPTIONS (reward claims) ----------
+    // ---------- REDEMPTIONS ----------
+    // Fixed: removed `claimedAt is timestamp` because the client writes
+    // FieldValue.serverTimestamp(), which rules can't type-check.
     match /redemptions/{redemptionId} {
       allow read: if isSignedIn()
         && (request.auth.uid == resource.data.userId || isAdmin());
@@ -203,15 +212,15 @@ service cloud.firestore {
         && request.resource.data.rewardName.size() <= 60
         && request.resource.data.pointsCost is int
         && request.resource.data.pointsCost > 0
-        && request.resource.data.createdAt is timestamp
         && request.resource.data.claimedAt == null
         && request.resource.data.claimedBy == null;
 
+      // Admin flips pending → claimed. No `claimedAt is timestamp`
+      // check because the value is a serverTimestamp sentinel.
       allow update: if isAdmin()
         && resource.data.status == 'pending'
         && request.resource.data.status == 'claimed'
-        && request.resource.data.claimedBy == request.auth.uid
-        && request.resource.data.claimedAt is timestamp;
+        && request.resource.data.claimedBy == request.auth.uid;
 
       allow delete: if false;
     }

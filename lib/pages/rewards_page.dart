@@ -1,10 +1,12 @@
 // lib/pages/rewards_page.dart
 import 'dart:math';
+
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+
 import '../models/loyalty_reward_model.dart';
 import '../models/user_model.dart';
 import '../services/user_stream_service.dart';
@@ -77,49 +79,59 @@ class RewardsPage extends StatelessWidget {
                         mainAxisAlignment:
                             MainAxisAlignment.spaceBetween,
                         children: [
-                          Column(
-                            crossAxisAlignment:
-                                CrossAxisAlignment.start,
-                            children: [
-                              Text(
-                                'My Points',
-                                style: GoogleFonts.poppins(
-                                  fontSize: 13,
-                                  color: Colors.grey.shade600,
-                                  fontWeight: FontWeight.w500,
-                                ),
-                              ),
-                              const SizedBox(height: 6),
-                              Row(
-                                children: [
-                                  const Icon(Icons.star_rounded,
-                                      color: primaryColor, size: 28),
-                                  const SizedBox(width: 6),
-                                  Text.rich(
-                                    TextSpan(
-                                      children: [
-                                        TextSpan(
-                                          text: '$points ',
-                                          style: GoogleFonts.poppins(
-                                            fontSize: 26,
-                                            fontWeight: FontWeight.w800,
-                                            color: primaryColor,
-                                          ),
-                                        ),
-                                        TextSpan(
-                                          text: 'Points',
-                                          style: GoogleFonts.poppins(
-                                            fontSize: 18,
-                                            fontWeight: FontWeight.w600,
-                                            color: Colors.black87,
-                                          ),
-                                        ),
-                                      ],
-                                    ),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment:
+                                  CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  'My Points',
+                                  style: GoogleFonts.poppins(
+                                    fontSize: 13,
+                                    color: Colors.grey.shade600,
+                                    fontWeight: FontWeight.w500,
                                   ),
-                                ],
-                              ),
-                            ],
+                                ),
+                                const SizedBox(height: 6),
+                                Row(
+                                  children: [
+                                    const Icon(Icons.star_rounded,
+                                        color: primaryColor, size: 28),
+                                    const SizedBox(width: 6),
+                                    Flexible(
+                                      child: Text.rich(
+                                        TextSpan(
+                                          children: [
+                                            TextSpan(
+                                              text: '$points ',
+                                              style:
+                                                  GoogleFonts.poppins(
+                                                fontSize: 26,
+                                                fontWeight:
+                                                    FontWeight.w800,
+                                                color: primaryColor,
+                                              ),
+                                            ),
+                                            TextSpan(
+                                              text: 'Points',
+                                              style:
+                                                  GoogleFonts.poppins(
+                                                fontSize: 18,
+                                                fontWeight:
+                                                    FontWeight.w600,
+                                                color: Colors.black87,
+                                              ),
+                                            ),
+                                          ],
+                                        ),
+                                        overflow: TextOverflow.ellipsis,
+                                        maxLines: 1,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ],
+                            ),
                           ),
                           Container(
                             padding: const EdgeInsets.all(10),
@@ -161,8 +173,8 @@ class RewardsPage extends StatelessWidget {
                       )
                     else if (rewards.isEmpty)
                       Padding(
-                        padding: const EdgeInsets.symmetric(
-                            vertical: 40),
+                        padding:
+                            const EdgeInsets.symmetric(vertical: 40),
                         child: Center(
                           child: Text(
                             'No rewards available right now.',
@@ -257,6 +269,8 @@ class _PendingRedemptionsSection extends StatelessWidget {
                   (data['rewardName'] ?? 'Reward').toString();
               final pointsCost =
                   (data['pointsCost'] as num?)?.toInt() ?? 0;
+              final createdAt =
+                  (data['createdAt'] as Timestamp?)?.toDate();
 
               return Container(
                 margin: const EdgeInsets.only(bottom: 10),
@@ -299,12 +313,27 @@ class _PendingRedemptionsSection extends StatelessWidget {
                               color: Colors.grey.shade700,
                             ),
                           ),
+                          if (createdAt != null) ...[
+                            const SizedBox(height: 2),
+                            Text(
+                              'Claimed at counter. Tap to show QR.',
+                              style: GoogleFonts.poppins(
+                                fontSize: 10,
+                                color: const Color(0xFFE65100),
+                                fontWeight: FontWeight.w500,
+                              ),
+                            ),
+                          ],
                         ],
                       ),
                     ),
                     ElevatedButton.icon(
-                      onPressed: () =>
-                          _showQrDialog(context, rewardName, code),
+                      onPressed: () => _showQrDialog(
+                        context,
+                        rewardName,
+                        code,
+                        redemptionId: d.id,
+                      ),
                       icon: const Icon(Icons.qr_code_2, size: 16),
                       label: Text(
                         'Show QR',
@@ -335,7 +364,7 @@ class _PendingRedemptionsSection extends StatelessWidget {
 // ═══════════════════════════════════════════════════════════════
 // Reward card
 // ═══════════════════════════════════════════════════════════════
-class _RewardCard extends StatelessWidget {
+class _RewardCard extends StatefulWidget {
   const _RewardCard({
     required this.reward,
     required this.currentPoints,
@@ -344,7 +373,15 @@ class _RewardCard extends StatelessWidget {
   final LoyaltyReward reward;
   final int currentPoints;
 
+  @override
+  State<_RewardCard> createState() => _RewardCardState();
+}
+
+class _RewardCardState extends State<_RewardCard> {
   static const primaryColor = Color(0xFF1E7B3B);
+
+  /// True while the redeem transaction is in flight.
+  bool _redeeming = false;
 
   IconData _iconFor(String name) {
     final n = name.toLowerCase();
@@ -363,8 +400,8 @@ class _RewardCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final bool canRedeem = currentPoints >= reward.points;
-    final icon = _iconFor(reward.name);
+    final bool canRedeem = widget.currentPoints >= widget.reward.points;
+    final icon = _iconFor(widget.reward.name);
 
     return Container(
       margin: const EdgeInsets.only(bottom: 14),
@@ -389,10 +426,10 @@ class _RewardCard extends StatelessWidget {
               width: 70,
               height: 70,
               color: Colors.grey.shade100,
-              child: reward.imageUrl != null &&
-                      reward.imageUrl!.isNotEmpty
+              child: widget.reward.imageUrl != null &&
+                      widget.reward.imageUrl!.isNotEmpty
                   ? Image.network(
-                      reward.imageUrl!,
+                      widget.reward.imageUrl!,
                       fit: BoxFit.cover,
                       errorBuilder: (_, __, ___) => Center(
                         child: Icon(icon,
@@ -411,16 +448,18 @@ class _RewardCard extends StatelessWidget {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  reward.name,
+                  widget.reward.name,
                   style: GoogleFonts.poppins(
                     fontWeight: FontWeight.w600,
                     fontSize: 15,
                     color: Colors.black87,
                   ),
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
                 ),
                 const SizedBox(height: 4),
                 Text(
-                  '${reward.points} Points',
+                  '${widget.reward.points} Points',
                   style: GoogleFonts.poppins(
                     fontWeight: FontWeight.w600,
                     fontSize: 13,
@@ -430,8 +469,10 @@ class _RewardCard extends StatelessWidget {
               ],
             ),
           ),
+          const SizedBox(width: 8),
           ElevatedButton(
-            onPressed: () => _handleRedeem(context, canRedeem),
+            onPressed:
+                _redeeming ? null : () => _handleRedeem(context, canRedeem),
             style: ElevatedButton.styleFrom(
               backgroundColor:
                   canRedeem ? primaryColor : Colors.grey.shade400,
@@ -443,13 +484,22 @@ class _RewardCard extends StatelessWidget {
                 borderRadius: BorderRadius.circular(10),
               ),
             ),
-            child: Text(
-              'Redeem',
-              style: GoogleFonts.poppins(
-                fontWeight: FontWeight.w600,
-                fontSize: 13,
-              ),
-            ),
+            child: _redeeming
+                ? const SizedBox(
+                    width: 16,
+                    height: 16,
+                    child: CircularProgressIndicator(
+                      color: Colors.white,
+                      strokeWidth: 2,
+                    ),
+                  )
+                : Text(
+                    'Redeem',
+                    style: GoogleFonts.poppins(
+                      fontWeight: FontWeight.w600,
+                      fontSize: 13,
+                    ),
+                  ),
           ),
         ],
       ),
@@ -459,10 +509,11 @@ class _RewardCard extends StatelessWidget {
   Future<void> _handleRedeem(
       BuildContext context, bool canRedeem) async {
     if (!canRedeem) {
+      final needed = widget.reward.points - widget.currentPoints;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(
-              'Not enough points! You need ${reward.points} points.'),
+              'Not enough points! You need $needed more.'),
           backgroundColor: Colors.orange.shade800,
         ),
       );
@@ -477,32 +528,23 @@ class _RewardCard extends StatelessWidget {
       return;
     }
 
-    // Loading indicator while we write to Firestore.
-    showDialog(
-      context: context,
-      barrierDismissible: false,
-      builder: (_) => const Center(
-        child: CircularProgressIndicator(color: Colors.white),
-      ),
-    );
+    setState(() => _redeeming = true);
 
     try {
-      final code = await _createRedemption(uid: uid, reward: reward);
-      if (context.mounted) Navigator.pop(context); // close loader
-      if (context.mounted) {
-        _showQrDialog(context, reward.name, code);
-      }
+      final code = await _createRedemption(uid: uid, reward: widget.reward);
+      if (!context.mounted) return;
+      setState(() => _redeeming = false);
+      _showQrDialog(context, widget.reward.name, code);
     } catch (e) {
-      if (context.mounted) Navigator.pop(context); // close loader
-      if (context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(
-                'Failed: ${e.toString().replaceFirst('Exception: ', '')}'),
-            backgroundColor: Colors.red,
-          ),
-        );
-      }
+      if (!context.mounted) return;
+      setState(() => _redeeming = false);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+              'Failed: ${e.toString().replaceFirst('Exception: ', '')}'),
+          backgroundColor: Colors.red,
+        ),
+      );
     }
   }
 
@@ -576,10 +618,20 @@ class _RewardCard extends StatelessWidget {
 void _showQrDialog(
   BuildContext context,
   String rewardName,
-  String code,
-) {
+  String code, {
+  String? redemptionId,
+}) {
   const primaryColor = Color(0xFF1E7B3B);
   final payload = 'REWARD_REDEEM:$code';
+
+  // If we know the redemption doc id, watch it so the dialog
+  // automatically updates to "Claimed" once the admin scans it.
+  final Stream<DocumentSnapshot>? statusStream = redemptionId == null
+      ? null
+      : FirebaseFirestore.instance
+          .collection('redemptions')
+          .doc(redemptionId)
+          .snapshots();
 
   showDialog(
     context: context,
@@ -656,23 +708,79 @@ void _showQrDialog(
               ),
             ),
             const SizedBox(height: 14),
-            Container(
-              padding: const EdgeInsets.symmetric(
-                  horizontal: 16, vertical: 8),
-              decoration: BoxDecoration(
-                color: const Color(0xFFFFF3E0),
-                borderRadius: BorderRadius.circular(10),
-                border: Border.all(color: const Color(0xFFFFCC80)),
-              ),
-              child: Text(
-                'Status: Pending Claim',
-                style: GoogleFonts.poppins(
-                  color: const Color(0xFFE65100),
-                  fontSize: 12,
-                  fontWeight: FontWeight.w600,
+
+            // ── Status chip: reads from Firestore when available ──
+            if (statusStream != null)
+              StreamBuilder<DocumentSnapshot>(
+                stream: statusStream,
+                builder: (context, snap) {
+                  final status = snap.data?.exists == true
+                      ? ((snap.data!.data() as Map)['status'] ?? 'pending')
+                          .toString()
+                      : 'pending';
+                  final isClaimed = status == 'claimed';
+                  return Container(
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 16, vertical: 8),
+                    decoration: BoxDecoration(
+                      color: isClaimed
+                          ? const Color(0xFFE8F5E9)
+                          : const Color(0xFFFFF3E0),
+                      borderRadius: BorderRadius.circular(10),
+                      border: Border.all(
+                        color: isClaimed
+                            ? const Color(0xFFA5D6A7)
+                            : const Color(0xFFFFCC80),
+                      ),
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(
+                          isClaimed
+                              ? Icons.check_circle
+                              : Icons.hourglass_top_rounded,
+                          size: 16,
+                          color: isClaimed
+                              ? const Color(0xFF2E7D32)
+                              : const Color(0xFFE65100),
+                        ),
+                        const SizedBox(width: 6),
+                        Text(
+                          isClaimed
+                              ? 'Claimed!'
+                              : 'Status: Pending Claim',
+                          style: GoogleFonts.poppins(
+                            color: isClaimed
+                                ? const Color(0xFF2E7D32)
+                                : const Color(0xFFE65100),
+                            fontSize: 12,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ],
+                    ),
+                  );
+                },
+              )
+            else
+              Container(
+                padding: const EdgeInsets.symmetric(
+                    horizontal: 16, vertical: 8),
+                decoration: BoxDecoration(
+                  color: const Color(0xFFFFF3E0),
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(color: const Color(0xFFFFCC80)),
+                ),
+                child: Text(
+                  'Status: Pending Claim',
+                  style: GoogleFonts.poppins(
+                    color: const Color(0xFFE65100),
+                    fontSize: 12,
+                    fontWeight: FontWeight.w600,
+                  ),
                 ),
               ),
-            ),
             const SizedBox(height: 8),
             Text(
               'Points have already been deducted. This QR can only be used once.',

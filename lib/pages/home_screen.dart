@@ -28,7 +28,7 @@ class HomeScreen extends StatelessWidget {
         backgroundColor: Colors.white,
         elevation: 0,
         title: Text(
-          'Canteen Click',
+          'Cpc Click',
           style: GoogleFonts.poppins(
             fontSize: 20,
             fontWeight: FontWeight.w700,
