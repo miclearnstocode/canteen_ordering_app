@@ -1,21 +1,13 @@
-// lib/services/admin_account_service.dart
-// ignore_for_file: unused_field
-
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_core/firebase_core.dart';
 import '../models/user_model.dart';
+import 'login_lookup_sync.dart';
 
 class AdminAccountService {
   final FirebaseFirestore _db = FirebaseFirestore.instance;
   final FirebaseAuth _auth = FirebaseAuth.instance;
 
-  /// Creates a Firebase Auth user on a *secondary* Firebase App so the
-  /// admin's current session is never touched, then writes the matching
-  /// Firestore doc with status = pending.
-  ///
-  /// The student cannot log in yet — the login page blocks `pending`
-  /// accounts. Call [releaseAccount] to flip them to `active`.
   Future<String> createPendingAccount({
     required String fullName,
     required String email,
@@ -102,14 +94,10 @@ class AdminAccountService {
     );
 
     await docRef.set(user.toMap());
+    await LoginLookupSync.upsert(user);
     return docRef.id;
   }
 
-  /// Marks the account active and removes the temp password so the student
-  /// can sign in with the credentials that were handed to them.
-  ///
-  /// Assumes the Firebase Auth user was already created by
-  /// [createPendingAccount].
   Future<void> releaseAccount(String uid) async {
     final userRef = _db.collection('users').doc(uid);
     final snap = await userRef.get();
@@ -117,16 +105,25 @@ class AdminAccountService {
       throw Exception('Account not found.');
     }
 
+    final data = snap.data() ?? {};
+
     await userRef.update({
       'accountStatus': AccountStatus.active.name,
       'tempPassword': FieldValue.delete(),
       'lastLoginAt': FieldValue.serverTimestamp(),
       'updatedAt': FieldValue.serverTimestamp(),
     });
+
+    // Mirror the status change in the public lookup docs.
+    await LoginLookupSync.updateStatus(
+      uid: uid,
+      email: (data['email'] ?? '').toString(),
+      username: data['username']?.toString(),
+      studentId: data['studentId']?.toString(),
+      newStatus: AccountStatus.active.name,
+    );
   }
 
-  /// Adds credits (1 credit = ₱1) after the admin receives the cash.
-  /// Also records a transaction in `credit_transactions` for the audit log.
   Future<void> addCredits({
     required String uid,
     required double amountInPesos,

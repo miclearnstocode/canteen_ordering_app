@@ -4,14 +4,13 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:google_sign_in/google_sign_in.dart';
 import 'package:flutter/foundation.dart' show kIsWeb, debugPrint;
 import '../models/user_model.dart';
+import 'login_lookup_service.dart';
+import 'login_lookup_sync.dart';
 
 class AuthService {
   final FirebaseAuth _auth = FirebaseAuth.instance;
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
 
-  /// GoogleSignIn.instance is a singleton in v7 — no constructor.
-  /// On web we still use signInWithPopup through Firebase, so we
-  /// only need this on mobile.
   final GoogleSignIn _googleSignIn = GoogleSignIn.instance;
 
   bool _googleInitialized = false;
@@ -48,72 +47,45 @@ class AuthService {
 
   // Sign in with username OR email
   Future<AppUser?> signInWithUser(
-      String userIdentifier, String password) async {
+    String userIdentifier,
+    String password,
+  ) async {
     final identifier = userIdentifier.trim();
-    if (identifier.isEmpty) {
-      throw Exception('Please enter your email, username, or student ID.');
+    if (identifier.isEmpty || password.isEmpty) {
+      throw Exception('Invalid credentials. Please check and try again.');
     }
 
+    const genericFailure =
+        'Invalid credentials. Please check and try again.';
+
     try {
-      // ── Step 1: Figure out the account email ──
-      String email;
+      // ── Step 1: Resolve identifier → email via login_lookup ──
+      final lookup = LoginLookupService();
+      final record = await lookup.lookup(identifier);
 
-      final bool looksLikeEmail =
-          identifier.contains('@') && identifier.contains('.');
-
-      if (looksLikeEmail) {
-        // Normalize to lowercase so "Juan@x.com" also matches "juan@x.com".
-        email = identifier.toLowerCase();
-      } else {
-        // Search by username OR studentId. Firestore can't OR across fields
-        // in a single query, so we run both and take the first hit.
-        final byUsername = await _firestore
-            .collection('users')
-            .where('username', isEqualTo: identifier)
-            .limit(1)
-            .get();
-
-        if (byUsername.docs.isNotEmpty) {
-          email = (byUsername.docs.first.data()['email'] ?? '').toString();
-        } else {
-          // Try studentId
-          final byStudentId = await _firestore
-              .collection('users')
-              .where('studentId', isEqualTo: identifier)
-              .limit(1)
-              .get();
-
-          if (byStudentId.docs.isEmpty) {
-            throw Exception(
-                'No account found with "$identifier". Check your email, username, or student ID.');
-          }
-          email = (byStudentId.docs.first.data()['email'] ?? '').toString();
-        }
+      if (record == null || record.email.isEmpty) {
+        // Burn a bit of time to hide timing side-channel.
+        await Future.delayed(const Duration(milliseconds: 400));
+        throw Exception(genericFailure);
       }
 
-      if (email.isEmpty) {
-        throw Exception(
-            'This account has no email on file. Please contact the canteen admin.');
-      }
-
-      // ── Step 2: Authenticate with the resolved email ──
+      // ── Step 2: Authenticate ──
       final userCredential = await _auth.signInWithEmailAndPassword(
-        email: email,
+        email: record.email,
         password: password,
       );
 
       final user = userCredential.user;
-      if (user == null) return null;
+      if (user == null) throw Exception(genericFailure);
 
-      // ── Step 3: Check account status before letting them through ──
-      // Pending accounts created by the admin are not yet allowed in.
+      // ── Step 3: Verify account status (from the authoritative users doc) ──
+      // We re-read the real doc now that we're authenticated.
       final userDoc =
           await _firestore.collection('users').doc(user.uid).get();
       final data = userDoc.data() ?? {};
       final status = (data['accountStatus'] ?? 'active').toString();
 
       if (status == 'pending') {
-        // Sign them out so they don't hold a half-authenticated session.
         await _auth.signOut();
         throw Exception(
             'Your account is pending release. Please inquire at the canteen counter.');
@@ -124,21 +96,16 @@ class AuthService {
             'Your account has been suspended. Please contact the canteen admin.');
       }
 
-      // ── Step 4: Update the login timestamp and return the profile ──
+      // ── Step 4: Update lastLoginAt and return profile ──
       await _updateLastLogin(user.uid);
       return await getCurrentUserData();
     } on FirebaseAuthException catch (e) {
-      if (e.code == 'user-not-found' || e.code == 'wrong-password') {
-        throw Exception('Invalid email/username/student ID or password.');
-      }
-      if (e.code == 'invalid-email') {
-        throw Exception('That email address looks invalid.');
-      }
       if (e.code == 'too-many-requests') {
         throw Exception(
             'Too many failed attempts. Please wait a few minutes and try again.');
       }
-      throw Exception('Login failed: ${e.message}');
+      // Everything else → one generic message.
+      throw Exception(genericFailure);
     }
   }
 
@@ -204,6 +171,7 @@ class AuthService {
         );
 
         await _firestore.collection('users').doc(user.uid).set(appUser.toMap());
+        await LoginLookupSync.upsert(appUser);
         return appUser;
       }
       return null;
