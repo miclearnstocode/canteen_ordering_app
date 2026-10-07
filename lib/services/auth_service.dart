@@ -4,8 +4,6 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:google_sign_in/google_sign_in.dart';
 import 'package:flutter/foundation.dart' show kIsWeb, debugPrint;
 import '../models/user_model.dart';
-import 'login_lookup_service.dart';
-import 'login_lookup_sync.dart';
 
 class AuthService {
   final FirebaseAuth _auth = FirebaseAuth.instance;
@@ -35,6 +33,40 @@ class AuthService {
     }
   }
 
+  /// Resolves an identifier (email / username / displayName / studentId)
+  /// to an email address by querying the `users` collection directly.
+  /// Returns `null` if no match is found.
+  Future<String?> _resolveIdentifierToEmail(String identifier) async {
+    // If it looks like an email, use it as-is.
+    final strictEmailRegex = RegExp(
+      r'^[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}$',
+    );
+    if (strictEmailRegex.hasMatch(identifier)) {
+      return identifier.toLowerCase();
+    }
+
+    // Try username, then displayName, then studentId.
+    final fieldsToTry = ['username', 'displayName', 'studentId'];
+    for (final field in fieldsToTry) {
+      try {
+        final snap = await _firestore
+            .collection('users')
+            .where(field, isEqualTo: identifier)
+            .limit(1)
+            .get();
+        if (snap.docs.isNotEmpty) {
+          final data = snap.docs.first.data();
+          final email = (data['email'] ?? '').toString();
+          if (email.isNotEmpty) return email.toLowerCase();
+        }
+      } catch (_) {
+        // try next field
+      }
+    }
+
+    return null;
+  }
+
   Future<AppUser?> signInWithUser(
     String userIdentifier,
     String password,
@@ -47,64 +79,8 @@ class AuthService {
     const genericFailure =
         'Invalid credentials. Please check and try again.';
 
-    final strictEmailRegex = RegExp(
-      r'^[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}$',
-    );
-    final looksLikeEmail = strictEmailRegex.hasMatch(identifier);
-
     try {
-      String? email;
-      try {
-        final lookup = LoginLookupService();
-        final record = await lookup.lookup(identifier);
-        if (record != null && record.email.isNotEmpty) {
-          email = record.email.toLowerCase();
-        }
-      } catch (_) {
-        // fall through
-      }
-
-      if (email == null && !looksLikeEmail) {
-        try {
-          final snap = await _firestore
-              .collection('users')
-              .where('username', isEqualTo: identifier)
-              .limit(1)
-              .get();
-
-          QuerySnapshot? result = snap;
-
-          if (result.docs.isEmpty) {
-            result = await _firestore
-                .collection('users')
-                .where('displayName', isEqualTo: identifier)
-                .limit(1)
-                .get();
-          }
-
-          if (result.docs.isEmpty) {
-            // Try studentId (students logging in by ID)
-            result = await _firestore
-                .collection('users')
-                .where('studentId', isEqualTo: identifier)
-                .limit(1)
-                .get();
-          }
-
-          if (result.docs.isNotEmpty) {
-            final data = result.docs.first.data() as Map<String, dynamic>;
-            final foundEmail = (data['email'] ?? '').toString();
-            if (foundEmail.isNotEmpty) {
-              email = foundEmail.toLowerCase();
-            }
-          }
-        } catch (_) {
-        }
-      }
-
-      if (email == null && looksLikeEmail) {
-        email = identifier.toLowerCase();
-      }
+      final email = await _resolveIdentifierToEmail(identifier);
 
       if (email == null) {
         await Future.delayed(const Duration(milliseconds: 400));
@@ -119,25 +95,28 @@ class AuthService {
       final user = userCredential.user;
       if (user == null) throw Exception(genericFailure);
 
+      // Read the user doc to check account status.
       final userDoc =
           await _firestore.collection('users').doc(user.uid).get();
       final data = userDoc.data() ?? {};
-      final status = (data['accountStatus'] ?? 'active').toString();
 
-      if (status == 'pending') {
-        await _auth.signOut();
-        throw Exception(
-            'Your account is pending release. Please inquire at the canteen counter.');
-      }
-      if (status == 'suspended') {
-        await _auth.signOut();
-        throw Exception(
-            'Your account has been suspended. Please contact the canteen admin.');
+      // Admin bypass — admins are never gated by accountStatus.
+      final isAdminDoc = data['role'] == 'admin';
+      if (!isAdminDoc) {
+        final status = (data['accountStatus'] ?? 'active').toString();
+        if (status == 'pending') {
+          await _auth.signOut();
+          throw Exception(
+              'Your account is pending release. Please inquire at the canteen counter.');
+        }
+        if (status == 'suspended') {
+          await _auth.signOut();
+          throw Exception(
+              'Your account has been suspended. Please contact the canteen admin.');
+        }
       }
 
-      await _ensureLookupForCurrentUser();
       await _updateLastLogin(user.uid);
-
       return await getCurrentUserData();
     } on FirebaseAuthException catch (e) {
       if (e.code == 'too-many-requests') {
@@ -145,35 +124,6 @@ class AuthService {
             'Too many failed attempts. Please wait a few minutes and try again.');
       }
       throw Exception(genericFailure);
-    }
-  }
-
-  Future<void> _ensureLookupForCurrentUser() async {
-    final authUser = _auth.currentUser;
-    if (authUser == null) return;
-
-    try {
-      final userDoc =
-          await _firestore.collection('users').doc(authUser.uid).get();
-      if (!userDoc.exists) return;
-
-      final appUser = AppUser.fromFirestore(userDoc);
-      if (appUser.email.isEmpty) return;
-
-      // Check whether the primary (email) lookup doc exists.
-      final existing = await _firestore
-          .collection('login_lookup')
-          .doc(appUser.email.toLowerCase())
-          .get();
-
-      if (existing.exists) return;
-
-      // Missing → sync all identifiers now.
-      await LoginLookupSync.upsert(appUser);
-      debugPrint('[AuthService] Self-healed login_lookup for ${appUser.email}');
-    } catch (e) {
-      // Non-fatal — user is already signed in.
-      debugPrint('[AuthService] _ensureLookupForCurrentUser failed: $e');
     }
   }
 
@@ -186,7 +136,6 @@ class AuthService {
       );
       final user = userCredential.user;
       if (user != null) {
-        await _ensureLookupForCurrentUser();
         await _updateLastLogin(user.uid);
         return await getCurrentUserData();
       }
@@ -206,28 +155,15 @@ class AuthService {
     UserRole role,
   ) async {
     try {
-      // Check username availability via the public lookup doc.
-      final usernameKey = username.trim().toLowerCase();
-      final usernameDoc = await _firestore
-          .collection('login_lookup')
-          .doc(usernameKey)
+      // Check username availability directly against the users collection.
+      final usernameSnap = await _firestore
+          .collection('users')
+          .where('username', isEqualTo: username.trim())
+          .limit(1)
           .get();
 
-      if (usernameDoc.exists) {
+      if (usernameSnap.docs.isNotEmpty) {
         throw Exception('Username already taken. Please choose another.');
-      }
-
-      // Also check email availability (in case someone else already
-      // registered with this email but never synced a lookup doc).
-      final emailKey = email.trim().toLowerCase();
-      final emailDoc = await _firestore
-          .collection('login_lookup')
-          .doc(emailKey)
-          .get();
-
-      if (emailDoc.exists) {
-        throw Exception(
-            'This email is already registered. Please sign in instead.');
       }
 
       final userCredential = await _auth.createUserWithEmailAndPassword(
@@ -261,7 +197,6 @@ class AuthService {
             .doc(user.uid)
             .set(appUser.toMap());
 
-        await LoginLookupSync.upsert(appUser);
         return appUser;
       }
       return null;
@@ -326,7 +261,6 @@ class AuthService {
     } else {
       await _updateLastLogin(user.uid);
     }
-    await _ensureLookupForCurrentUser();
     return await getCurrentUserData();
   }
 
@@ -352,17 +286,17 @@ class AuthService {
         .collection('users')
         .doc(user.uid)
         .set(appUser.toMap(), SetOptions(merge: true));
-    await LoginLookupSync.upsert(appUser);
     return appUser;
   }
 
-  /// Uses set+merge so it never throws if the user doc is missing.
+  /// Writes only `lastLoginAt`. Does NOT touch `isActive` — toggling that
+  /// field races with the next login and can be rejected by Firestore
+  /// rules when `credits`/`points` are missing on the doc.
   Future<void> _updateLastLogin(String uid) async {
     try {
       await _firestore.collection('users').doc(uid).set(
         {
           'lastLoginAt': FieldValue.serverTimestamp(),
-          'isActive': true,
         },
         SetOptions(merge: true),
       );
@@ -371,17 +305,10 @@ class AuthService {
     }
   }
 
+  /// Signs out the Firebase user and the Google session. Does NOT write
+  /// to Firestore — avoids racing with the next login's user-doc read.
   Future<void> signOut() async {
     try {
-      final user = _auth.currentUser;
-      if (user != null) {
-        try {
-          await _firestore.collection('users').doc(user.uid).set(
-            {'isActive': false},
-            SetOptions(merge: true),
-          );
-        } catch (_) {}
-      }
       if (!kIsWeb && _googleInitialized) {
         await _googleSignIn.signOut();
       }
@@ -456,11 +383,12 @@ class AuthService {
 
   Future<bool> isUsernameAvailable(String username) async {
     try {
-      final doc = await _firestore
-          .collection('login_lookup')
-          .doc(username.trim().toLowerCase())
+      final snap = await _firestore
+          .collection('users')
+          .where('username', isEqualTo: username.trim())
+          .limit(1)
           .get();
-      return !doc.exists;
+      return snap.docs.isEmpty;
     } catch (e) {
       return false;
     }
@@ -471,15 +399,6 @@ class AuthService {
     if (user == null) throw Exception('No user logged in');
 
     try {
-      final doc = await _firestore.collection('users').doc(user.uid).get();
-      if (doc.exists) {
-        final u = AppUser.fromFirestore(doc);
-        await LoginLookupSync.remove(
-          email: u.email,
-          username: u.username,
-          studentId: u.studentId,
-        );
-      }
       await _firestore.collection('users').doc(user.uid).delete();
       await user.delete();
     } catch (e) {

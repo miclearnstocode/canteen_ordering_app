@@ -68,18 +68,48 @@ class AppUser {
   factory AppUser.fromFirestore(DocumentSnapshot doc) {
     final data = doc.data() as Map<String, dynamic>;
 
-    UserRole role = (data['role'] == 'admin') ? UserRole.admin : UserRole.user;
+    final isAdminDoc = data['role'] == 'admin';
+    final UserRole role = isAdminDoc ? UserRole.admin : UserRole.user;
 
+    // ── Admin bypass: admins are never gated by account status ──
+    // If the doc is an admin, short-circuit every status check and
+    // return immediately with a forced-active account.
+    if (isAdminDoc) {
+      return AppUser(
+        uid: doc.id,
+        email: data['email'] ?? '',
+        displayName: data['displayName'] ?? data['username'],
+        photoURL: data['photoURL'],
+        username: data['username'],
+        role: UserRole.admin,
+        accountStatus: AccountStatus.active,   // forced, ignores stored field
+        createdAt: (data['createdAt'] as Timestamp?)?.toDate(),
+        lastLoginAt: (data['lastLoginAt'] as Timestamp?)?.toDate(),
+        isActive: data['isActive'] ?? true,
+        points: data['points'] ?? 0,
+        credits: (data['credits'] as num?)?.toDouble() ?? 0.0,
+        studentId: data['studentId'],
+        course: data['course'],
+        tempPassword: data['tempPassword'],
+        preferences: data['preferences'] ?? {},
+      );
+    }
+
+    // ── Non-admin path: status logic as before ──
     AccountStatus status;
     switch (data['accountStatus']) {
-      case 'active':
-        status = AccountStatus.active;
+      case 'pending':
+        status = AccountStatus.pending;
         break;
       case 'suspended':
         status = AccountStatus.suspended;
         break;
+      case 'active':
+        status = AccountStatus.active;
+        break;
       default:
-        status = AccountStatus.pending;
+        status = AccountStatus.active;
+        break;
     }
 
     return AppUser(

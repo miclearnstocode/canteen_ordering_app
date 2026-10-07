@@ -2,11 +2,9 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_core/firebase_core.dart';
 import '../models/user_model.dart';
-import 'login_lookup_sync.dart';
 
 class AdminAccountService {
   final FirebaseFirestore _db = FirebaseFirestore.instance;
-  final FirebaseAuth _auth = FirebaseAuth.instance;
 
   Future<String> createPendingAccount({
     required String fullName,
@@ -94,7 +92,6 @@ class AdminAccountService {
     );
 
     await docRef.set(user.toMap());
-    await LoginLookupSync.upsert(user);
     return docRef.id;
   }
 
@@ -105,23 +102,12 @@ class AdminAccountService {
       throw Exception('Account not found.');
     }
 
-    final data = snap.data() ?? {};
-
     await userRef.update({
       'accountStatus': AccountStatus.active.name,
       'tempPassword': FieldValue.delete(),
       'lastLoginAt': FieldValue.serverTimestamp(),
       'updatedAt': FieldValue.serverTimestamp(),
     });
-
-    // Mirror the status change in the public lookup docs.
-    await LoginLookupSync.updateStatus(
-      uid: uid,
-      email: (data['email'] ?? '').toString(),
-      username: data['username']?.toString(),
-      studentId: data['studentId']?.toString(),
-      newStatus: AccountStatus.active.name,
-    );
   }
 
   Future<void> addCredits({
