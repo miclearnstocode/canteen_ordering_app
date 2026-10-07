@@ -10,42 +10,31 @@ import 'login_lookup_sync.dart';
 class AuthService {
   final FirebaseAuth _auth = FirebaseAuth.instance;
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
-
   final GoogleSignIn _googleSignIn = GoogleSignIn.instance;
 
   bool _googleInitialized = false;
 
-  /// Initialize GoogleSignIn once, only on mobile.
-  /// Calling initialize() on web without a clientId will hang.
   Future<void> _ensureGoogleInitialized() async {
     if (kIsWeb || _googleInitialized) return;
     await _googleSignIn.initialize();
     _googleInitialized = true;
   }
 
-  // Stream of auth state changes
   Stream<User?> get authStateChanges => _auth.authStateChanges();
-
-  // Get current user
   User? get currentUser => _auth.currentUser;
 
-  // Get current user data from Firestore
   Future<AppUser?> getCurrentUserData() async {
     final user = _auth.currentUser;
     if (user == null) return null;
-
     try {
       final doc = await _firestore.collection('users').doc(user.uid).get();
-      if (doc.exists) {
-        return AppUser.fromFirestore(doc);
-      }
+      if (doc.exists) return AppUser.fromFirestore(doc);
       return await _createUserDocument(user);
     } catch (e) {
       return null;
     }
   }
 
-  // Sign in with username OR email
   Future<AppUser?> signInWithUser(
     String userIdentifier,
     String password,
@@ -58,28 +47,78 @@ class AuthService {
     const genericFailure =
         'Invalid credentials. Please check and try again.';
 
-    try {
-      // ── Step 1: Resolve identifier → email via login_lookup ──
-      final lookup = LoginLookupService();
-      final record = await lookup.lookup(identifier);
+    final strictEmailRegex = RegExp(
+      r'^[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}$',
+    );
+    final looksLikeEmail = strictEmailRegex.hasMatch(identifier);
 
-      if (record == null || record.email.isEmpty) {
-        // Burn a bit of time to hide timing side-channel.
+    try {
+      String? email;
+      try {
+        final lookup = LoginLookupService();
+        final record = await lookup.lookup(identifier);
+        if (record != null && record.email.isNotEmpty) {
+          email = record.email.toLowerCase();
+        }
+      } catch (_) {
+        // fall through
+      }
+
+      if (email == null && !looksLikeEmail) {
+        try {
+          final snap = await _firestore
+              .collection('users')
+              .where('username', isEqualTo: identifier)
+              .limit(1)
+              .get();
+
+          QuerySnapshot? result = snap;
+
+          if (result.docs.isEmpty) {
+            result = await _firestore
+                .collection('users')
+                .where('displayName', isEqualTo: identifier)
+                .limit(1)
+                .get();
+          }
+
+          if (result.docs.isEmpty) {
+            // Try studentId (students logging in by ID)
+            result = await _firestore
+                .collection('users')
+                .where('studentId', isEqualTo: identifier)
+                .limit(1)
+                .get();
+          }
+
+          if (result.docs.isNotEmpty) {
+            final data = result.docs.first.data() as Map<String, dynamic>;
+            final foundEmail = (data['email'] ?? '').toString();
+            if (foundEmail.isNotEmpty) {
+              email = foundEmail.toLowerCase();
+            }
+          }
+        } catch (_) {
+        }
+      }
+
+      if (email == null && looksLikeEmail) {
+        email = identifier.toLowerCase();
+      }
+
+      if (email == null) {
         await Future.delayed(const Duration(milliseconds: 400));
         throw Exception(genericFailure);
       }
 
-      // ── Step 2: Authenticate ──
       final userCredential = await _auth.signInWithEmailAndPassword(
-        email: record.email,
+        email: email,
         password: password,
       );
 
       final user = userCredential.user;
       if (user == null) throw Exception(genericFailure);
 
-      // ── Step 3: Verify account status (from the authoritative users doc) ──
-      // We re-read the real doc now that we're authenticated.
       final userDoc =
           await _firestore.collection('users').doc(user.uid).get();
       final data = userDoc.data() ?? {};
@@ -96,20 +135,49 @@ class AuthService {
             'Your account has been suspended. Please contact the canteen admin.');
       }
 
-      // ── Step 4: Update lastLoginAt and return profile ──
+      await _ensureLookupForCurrentUser();
       await _updateLastLogin(user.uid);
+
       return await getCurrentUserData();
     } on FirebaseAuthException catch (e) {
       if (e.code == 'too-many-requests') {
         throw Exception(
             'Too many failed attempts. Please wait a few minutes and try again.');
       }
-      // Everything else → one generic message.
       throw Exception(genericFailure);
     }
   }
 
-  // Sign in with email and password
+  Future<void> _ensureLookupForCurrentUser() async {
+    final authUser = _auth.currentUser;
+    if (authUser == null) return;
+
+    try {
+      final userDoc =
+          await _firestore.collection('users').doc(authUser.uid).get();
+      if (!userDoc.exists) return;
+
+      final appUser = AppUser.fromFirestore(userDoc);
+      if (appUser.email.isEmpty) return;
+
+      // Check whether the primary (email) lookup doc exists.
+      final existing = await _firestore
+          .collection('login_lookup')
+          .doc(appUser.email.toLowerCase())
+          .get();
+
+      if (existing.exists) return;
+
+      // Missing → sync all identifiers now.
+      await LoginLookupSync.upsert(appUser);
+      debugPrint('[AuthService] Self-healed login_lookup for ${appUser.email}');
+    } catch (e) {
+      // Non-fatal — user is already signed in.
+      debugPrint('[AuthService] _ensureLookupForCurrentUser failed: $e');
+    }
+  }
+
+  // Sign in with email and password (kept for direct calls)
   Future<AppUser?> signInWithEmail(String email, String password) async {
     try {
       final userCredential = await _auth.signInWithEmailAndPassword(
@@ -118,6 +186,7 @@ class AuthService {
       );
       final user = userCredential.user;
       if (user != null) {
+        await _ensureLookupForCurrentUser();
         await _updateLastLogin(user.uid);
         return await getCurrentUserData();
       }
@@ -127,7 +196,9 @@ class AuthService {
     }
   }
 
-  // Register with email and password
+  // ─────────────────────────────────────────────────────────────────
+  // REGISTER
+  // ─────────────────────────────────────────────────────────────────
   Future<AppUser?> registerWithEmail(
     String email,
     String password,
@@ -135,14 +206,28 @@ class AuthService {
     UserRole role,
   ) async {
     try {
-      final existingUser = await _firestore
-          .collection('users')
-          .where('username', isEqualTo: username)
-          .limit(1)
+      // Check username availability via the public lookup doc.
+      final usernameKey = username.trim().toLowerCase();
+      final usernameDoc = await _firestore
+          .collection('login_lookup')
+          .doc(usernameKey)
           .get();
 
-      if (existingUser.docs.isNotEmpty) {
+      if (usernameDoc.exists) {
         throw Exception('Username already taken. Please choose another.');
+      }
+
+      // Also check email availability (in case someone else already
+      // registered with this email but never synced a lookup doc).
+      final emailKey = email.trim().toLowerCase();
+      final emailDoc = await _firestore
+          .collection('login_lookup')
+          .doc(emailKey)
+          .get();
+
+      if (emailDoc.exists) {
+        throw Exception(
+            'This email is already registered. Please sign in instead.');
       }
 
       final userCredential = await _auth.createUserWithEmailAndPassword(
@@ -160,17 +245,22 @@ class AuthService {
           displayName: username,
           username: username,
           role: role,
+          accountStatus: AccountStatus.active,
           createdAt: DateTime.now(),
           lastLoginAt: DateTime.now(),
           isActive: true,
-          points: 125,
+          points: 0,
           preferences: {
             'notifications': true,
             'theme': 'light',
           },
         );
 
-        await _firestore.collection('users').doc(user.uid).set(appUser.toMap());
+        await _firestore
+            .collection('users')
+            .doc(user.uid)
+            .set(appUser.toMap());
+
         await LoginLookupSync.upsert(appUser);
         return appUser;
       }
@@ -180,7 +270,7 @@ class AuthService {
     }
   }
 
-  // Sign in with Google
+  // Google sign-in — unchanged
   Future<AppUser?> signInWithGoogle() async {
     try {
       final GoogleSignInAccount googleUser;
@@ -194,15 +284,11 @@ class AuthService {
         return await _handleGoogleUser(user);
       }
 
-      // ── Mobile flow ──
       await _ensureGoogleInitialized();
 
-      // 1. Authenticate (replaces signIn() in v7)
       final account = await _googleSignIn.authenticate();
       googleUser = account;
 
-      // 2. Authorize to get an access token (v7 no longer returns it
-      //    from authentication)
       final authorization =
           await googleUser.authorizationClient.authorizationForScopes(
         ['email', 'profile'],
@@ -211,10 +297,8 @@ class AuthService {
                 ['email', 'profile'],
               );
 
-      // 3. Get the ID token from the authentication object
       final idToken = googleUser.authentication.idToken;
 
-      // 4. Build the Firebase credential
       final credential = GoogleAuthProvider.credential(
         accessToken: authorization.accessToken,
         idToken: idToken,
@@ -225,7 +309,6 @@ class AuthService {
       if (user == null) return null;
       return await _handleGoogleUser(user);
     } on GoogleSignInException catch (e) {
-      // User cancelled or other Google-specific error
       debugPrint('GoogleSignInException: ${e.code} ${e.description}');
       if (e.code == GoogleSignInExceptionCode.canceled) {
         return null;
@@ -236,7 +319,6 @@ class AuthService {
     }
   }
 
-  // Shared post-sign-in handling for both web & mobile
   Future<AppUser?> _handleGoogleUser(User user) async {
     final doc = await _firestore.collection('users').doc(user.uid).get();
     if (!doc.exists) {
@@ -244,10 +326,10 @@ class AuthService {
     } else {
       await _updateLastLogin(user.uid);
     }
+    await _ensureLookupForCurrentUser();
     return await getCurrentUserData();
   }
 
-  // Create user document
   Future<AppUser> _createUserDocument(User user) async {
     final username = user.displayName ?? user.email?.split('@').first ?? 'User';
     final appUser = AppUser(
@@ -256,35 +338,49 @@ class AuthService {
       displayName: username,
       username: username,
       role: UserRole.user,
+      accountStatus: AccountStatus.active,
       createdAt: DateTime.now(),
       lastLoginAt: DateTime.now(),
       isActive: true,
-      points: 125,
+      points: 0,
       preferences: {
         'notifications': true,
         'theme': 'light',
       },
     );
-    await _firestore.collection('users').doc(user.uid).set(appUser.toMap());
+    await _firestore
+        .collection('users')
+        .doc(user.uid)
+        .set(appUser.toMap(), SetOptions(merge: true));
+    await LoginLookupSync.upsert(appUser);
     return appUser;
   }
 
-  // Update last login time
+  /// Uses set+merge so it never throws if the user doc is missing.
   Future<void> _updateLastLogin(String uid) async {
-    await _firestore.collection('users').doc(uid).update({
-      'lastLoginAt': FieldValue.serverTimestamp(),
-      'isActive': true,
-    });
+    try {
+      await _firestore.collection('users').doc(uid).set(
+        {
+          'lastLoginAt': FieldValue.serverTimestamp(),
+          'isActive': true,
+        },
+        SetOptions(merge: true),
+      );
+    } catch (_) {
+      // Non-fatal.
+    }
   }
 
-  // Sign out
   Future<void> signOut() async {
     try {
       final user = _auth.currentUser;
       if (user != null) {
-        await _firestore.collection('users').doc(user.uid).update({
-          'isActive': false,
-        });
+        try {
+          await _firestore.collection('users').doc(user.uid).set(
+            {'isActive': false},
+            SetOptions(merge: true),
+          );
+        } catch (_) {}
       }
       if (!kIsWeb && _googleInitialized) {
         await _googleSignIn.signOut();
@@ -295,7 +391,6 @@ class AuthService {
     }
   }
 
-  // Handle auth exceptions
   String _handleAuthException(FirebaseAuthException e) {
     switch (e.code) {
       case 'user-not-found':
@@ -315,7 +410,6 @@ class AuthService {
     }
   }
 
-  // Update user profile
   Future<void> updateUserProfile({
     String? username,
     String? displayName,
@@ -340,46 +434,52 @@ class AuthService {
       if (preferences != null) updates['preferences'] = preferences;
 
       if (updates.isNotEmpty) {
-        await _firestore.collection('users').doc(user.uid).update(updates);
+        await _firestore
+            .collection('users')
+            .doc(user.uid)
+            .set(updates, SetOptions(merge: true));
       }
     } catch (e) {
       rethrow;
     }
   }
 
-  // Get user by ID
   Future<AppUser?> getUserById(String uid) async {
     try {
       final doc = await _firestore.collection('users').doc(uid).get();
-      if (doc.exists) {
-        return AppUser.fromFirestore(doc);
-      }
+      if (doc.exists) return AppUser.fromFirestore(doc);
       return null;
     } catch (e) {
       return null;
     }
   }
 
-  // Check if username is available
   Future<bool> isUsernameAvailable(String username) async {
     try {
-      final query = await _firestore
-          .collection('users')
-          .where('username', isEqualTo: username)
-          .limit(1)
+      final doc = await _firestore
+          .collection('login_lookup')
+          .doc(username.trim().toLowerCase())
           .get();
-      return query.docs.isEmpty;
+      return !doc.exists;
     } catch (e) {
       return false;
     }
   }
 
-  // Delete user account
   Future<void> deleteAccount() async {
     final user = _auth.currentUser;
     if (user == null) throw Exception('No user logged in');
 
     try {
+      final doc = await _firestore.collection('users').doc(user.uid).get();
+      if (doc.exists) {
+        final u = AppUser.fromFirestore(doc);
+        await LoginLookupSync.remove(
+          email: u.email,
+          username: u.username,
+          studentId: u.studentId,
+        );
+      }
       await _firestore.collection('users').doc(user.uid).delete();
       await user.delete();
     } catch (e) {
