@@ -114,8 +114,8 @@ class _MenuPageState extends State<MenuPage> {
           }
 
           final items = snapshot.data!.docs
-              .map((doc) =>
-                  MenuItemModel.fromMap(doc.id, doc.data() as Map<String, dynamic>))
+              .map((doc) => MenuItemModel.fromMap(
+                  doc.id, doc.data() as Map<String, dynamic>))
               .toList();
 
           // Client-side filtering — avoids needing a composite index.
@@ -149,9 +149,15 @@ class _MenuPageState extends State<MenuPage> {
                               color: Colors.grey.shade600),
                         ),
                       )
-                    : ListView.builder(
-                        padding: const EdgeInsets.symmetric(
-                            horizontal: 16, vertical: 8),
+                    : GridView.builder(
+                        padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
+                        gridDelegate:
+                            const SliverGridDelegateWithFixedCrossAxisCount(
+                          crossAxisCount: 2, // ← 2 columns
+                          crossAxisSpacing: 12,
+                          mainAxisSpacing: 12,
+                          childAspectRatio: 0.72, // ← controls card shape
+                        ),
                         itemCount: filtered.length,
                         itemBuilder: (context, index) =>
                             _buildFoodCard(filtered[index]),
@@ -262,13 +268,14 @@ class _MenuPageState extends State<MenuPage> {
     );
   }
 
+  // ─────────────────────────────────────────────────────────────
+  // GRID CARD  — vertical layout (image on top, info below)
+  // ─────────────────────────────────────────────────────────────
   Widget _buildFoodCard(MenuItemModel item) {
     final icon = _iconForCategory(item.category);
     final outOfStock = item.stock <= 0;
 
     return Container(
-      margin: const EdgeInsets.only(bottom: 14),
-      padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
         color: Colors.white,
         borderRadius: BorderRadius.circular(18),
@@ -281,122 +288,211 @@ class _MenuPageState extends State<MenuPage> {
           ),
         ],
       ),
-      child: Row(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          ClipRRect(
-            borderRadius: BorderRadius.circular(14),
-            child: Container(
-              width: 76,
-              height: 76,
-              color: Colors.grey.shade100,
-              child: item.imageUrl != null && item.imageUrl!.isNotEmpty
-                  ? Image.network(
-                      item.imageUrl!,
-                      fit: BoxFit.cover,
-                      errorBuilder: (_, __, ___) => Center(
-                        child:
-                            Icon(icon, size: 36, color: primaryColor),
-                      ),
-                    )
-                  : Center(child: Icon(icon, size: 36, color: primaryColor)),
-            ),
-          ),
-          const SizedBox(width: 14),
+          // ── Image (top, square-ish) ──
           Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
+            flex: 6,
+            child: Stack(
               children: [
-                Text(
-                  item.name,
-                  style: GoogleFonts.poppins(
-                    fontWeight: FontWeight.w600,
-                    fontSize: 15,
-                    color: Colors.black87,
+                ClipRRect(
+                  borderRadius: const BorderRadius.vertical(
+                    top: Radius.circular(18),
+                  ),
+                  child: SizedBox(
+                    width: double.infinity,
+                    height: double.infinity,
+                    child: item.imageUrl != null && item.imageUrl!.isNotEmpty
+                        ? Image.network(
+                            item.imageUrl!,
+                            fit: BoxFit.cover,
+                            errorBuilder: (_, __, ___) => Container(
+                              color: Colors.grey.shade100,
+                              child: Center(
+                                child: Icon(icon,
+                                    size: 48, color: primaryColor),
+                              ),
+                            ),
+                          )
+                        : Container(
+                            color: Colors.grey.shade100,
+                            child: Center(
+                              child: Icon(icon,
+                                  size: 48, color: primaryColor),
+                            ),
+                          ),
                   ),
                 ),
-                if (item.description.isNotEmpty) ...[
-                  const SizedBox(height: 2),
-                  Text(
-                    item.description,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: GoogleFonts.poppins(
-                      fontSize: 12,
-                      color: Colors.grey.shade600,
+
+                // ── Out of stock overlay ──
+                if (outOfStock)
+                  Positioned.fill(
+                    child: Container(
+                      decoration: BoxDecoration(
+                        color: Colors.black.withValues(alpha: 0.45),
+                        borderRadius: const BorderRadius.vertical(
+                          top: Radius.circular(18),
+                        ),
+                      ),
+                      child: Center(
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 10, vertical: 6),
+                          decoration: BoxDecoration(
+                            color: Colors.white,
+                            borderRadius: BorderRadius.circular(8),
+                          ),
+                          child: Text(
+                            'Out of Stock',
+                            style: GoogleFonts.poppins(
+                              fontSize: 11,
+                              fontWeight: FontWeight.w600,
+                              color: Colors.red.shade700,
+                            ),
+                          ),
+                        ),
+                      ),
                     ),
                   ),
-                ],
-                const SizedBox(height: 6),
-                Row(
-                  children: [
-                    Text(
-                      '₱${item.price.toStringAsFixed(0)}',
-                      style: GoogleFonts.poppins(
-                        fontWeight: FontWeight.w700,
-                        fontSize: 15,
-                        color: Colors.black87,
+
+                // ── Stock badge (top-left) ──
+                if (!outOfStock)
+                  Positioned(
+                    top: 8,
+                    left: 8,
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 8, vertical: 4),
+                      decoration: BoxDecoration(
+                        color: Colors.white.withValues(alpha: 0.95),
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      child: Text(
+                        '${item.stock} left',
+                        style: GoogleFonts.poppins(
+                          fontSize: 10,
+                          fontWeight: FontWeight.w600,
+                          color: item.stock <= 5
+                              ? Colors.orange.shade700
+                              : Colors.grey.shade700,
+                        ),
                       ),
                     ),
-                    const SizedBox(width: 8),
-                    Text(
-                      '• ${item.stock} left',
-                      style: GoogleFonts.poppins(
-                        fontSize: 11,
-                        color: outOfStock
-                            ? Colors.red.shade400
-                            : Colors.grey.shade600,
-                      ),
-                    ),
-                  ],
-                ),
+                  ),
               ],
             ),
           ),
-          GestureDetector(
-            onTap: outOfStock
-                ? null
-                : () {
-                    _state.addToCart(
-                      item.id,
-                      item.name,
-                      item.price,
-                      item.imageUrl ?? '',
-                      icon,
-                    );
-                    ScaffoldMessenger.of(context).clearSnackBars();
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      SnackBar(
-                        content: Text('Added ${item.name} to cart!'),
-                        duration: const Duration(milliseconds: 1200),
-                        behavior: SnackBarBehavior.floating,
-                        backgroundColor: primaryColor,
+
+          // ── Info section ──
+          Expanded(
+            flex: 5,
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(10, 8, 10, 10),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  // Name
+                  Text(
+                    item.name,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: GoogleFonts.poppins(
+                      fontWeight: FontWeight.w600,
+                      fontSize: 13,
+                      color: Colors.black87,
+                      height: 1.2,
+                    ),
+                  ),
+
+                  // Description (optional, 1 line)
+                  if (item.description.isNotEmpty) ...[
+                    const SizedBox(height: 2),
+                    Text(
+                      item.description,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: GoogleFonts.poppins(
+                        fontSize: 10,
+                        color: Colors.grey.shade600,
                       ),
-                    );
-                  },
-            child: Container(
-              width: 38,
-              height: 38,
-              decoration: BoxDecoration(
-                color: outOfStock ? Colors.grey.shade400 : primaryColor,
-                shape: BoxShape.circle,
-                boxShadow: outOfStock
-                    ? []
-                    : [
-                        BoxShadow(
-                          color: primaryColor.withValues(alpha: 0.3),
-                          blurRadius: 6,
-                          offset: const Offset(0, 2),
+                    ),
+                  ],
+
+                  const Spacer(),
+
+                  // Price + Add button
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    crossAxisAlignment: CrossAxisAlignment.center,
+                    children: [
+                      Flexible(
+                        child: Text(
+                          '₱${item.price.toStringAsFixed(0)}',
+                          overflow: TextOverflow.ellipsis,
+                          style: GoogleFonts.poppins(
+                            fontWeight: FontWeight.w700,
+                            fontSize: 15,
+                            color: Colors.black87,
+                          ),
                         ),
-                      ],
-              ),
-              child: Icon(
-                outOfStock ? Icons.block : Icons.add,
-                color: Colors.white,
-                size: 22,
+                      ),
+                      GestureDetector(
+                        onTap: outOfStock
+                            ? null
+                            : () {
+                                _state.addToCart(
+                                  item.id,
+                                  item.name,
+                                  item.price,
+                                  item.imageUrl ?? '',
+                                  icon,
+                                );
+                                ScaffoldMessenger.of(context)
+                                    .clearSnackBars();
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  SnackBar(
+                                    content: Text(
+                                        'Added ${item.name} to cart!'),
+                                    duration: const Duration(
+                                        milliseconds: 1200),
+                                    behavior: SnackBarBehavior.floating,
+                                    backgroundColor: primaryColor,
+                                  ),
+                                );
+                              },
+                        child: Container(
+                          width: 32,
+                          height: 32,
+                          decoration: BoxDecoration(
+                            color: outOfStock
+                                ? Colors.grey.shade400
+                                : primaryColor,
+                            shape: BoxShape.circle,
+                            boxShadow: outOfStock
+                                ? []
+                                : [
+                                    BoxShadow(
+                                      color: primaryColor
+                                          .withValues(alpha: 0.3),
+                                      blurRadius: 6,
+                                      offset: const Offset(0, 2),
+                                    ),
+                                  ],
+                          ),
+                          child: Icon(
+                            outOfStock ? Icons.block : Icons.add,
+                            color: Colors.white,
+                            size: 18,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
               ),
             ),
           ),
-          const SizedBox(width: 4),
         ],
       ),
     );
