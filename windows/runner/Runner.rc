@@ -90,12 +90,12 @@ BEGIN
         BLOCK "040904e4"
         BEGIN
             VALUE "CompanyName", "com.example" "\0"
-            VALUE "FileDescription", "canteen_ordering_app" "\0"
+            VALUE "FileDescription", "CPC Canteen Click" "\0"
             VALUE "FileVersion", VERSION_AS_STRING "\0"
-            VALUE "InternalName", "canteen_ordering_app" "\0"
+            VALUE "InternalName", "CPC Canteen Click" "\0"
             VALUE "LegalCopyright", "Copyright (C) 2026 com.example. All rights reserved." "\0"
-            VALUE "OriginalFilename", "canteen_ordering_app.exe" "\0"
-            VALUE "ProductName", "canteen_ordering_app" "\0"
+            VALUE "OriginalFilename", "cpc_canteen_click.exe" "\0"
+            VALUE "ProductName", "CPC Canteen Click" "\0"
             VALUE "ProductVersion", VERSION_AS_STRING "\0"
         END
     END
