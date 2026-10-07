@@ -3,7 +3,6 @@ import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import '../services/auth_service.dart';
 import 'register_page.dart';
-import '../auth_gate.dart';
 
 class LoginPage extends StatefulWidget {
   const LoginPage({super.key});
@@ -36,16 +35,18 @@ class _LoginPageState extends State<LoginPage> {
         _userController.text.trim(),
         _passwordController.text.trim(),
       );
-      if (mounted) {
-        Navigator.pushReplacement(
-          context,
-          MaterialPageRoute(builder: (context) => const AuthGate()),
-        );
-      }
+      // No manual navigation — AuthGate listens to authStateChanges and
+      // will route automatically once the user signs in.
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Login failed: $e'), backgroundColor: Colors.red.shade400),
+          SnackBar(
+            content: Text(
+              e.toString().replaceFirst('Exception: ', ''),
+            ),
+            backgroundColor: Colors.red.shade400,
+            behavior: SnackBarBehavior.floating,
+          ),
         );
       }
     } finally {
@@ -66,20 +67,35 @@ class _LoginPageState extends State<LoginPage> {
               const SizedBox(height: 40),
               Center(
                 child: Container(
-                  width: 80,
-                  height: 80,
+                  width: 100,
+                  height: 100,
                   decoration: BoxDecoration(
-                    color: primaryColor,
+                    color: Colors.white,
                     shape: BoxShape.circle,
                     boxShadow: [
                       BoxShadow(
-                        color: primaryColor.withValues(alpha: 0.3),
+                        color: primaryColor.withValues(alpha: 0.25),
                         blurRadius: 20,
                         offset: const Offset(0, 10),
                       ),
                     ],
                   ),
-                  child: const Icon(Icons.restaurant_menu_rounded, size: 40, color: Colors.white),
+                  child: ClipOval(
+                    child: Padding(
+                      padding: const EdgeInsets.all(8),
+                      child: Image.asset(
+                        'assets/icon/cpc_logo.png',
+                        fit: BoxFit.contain,
+                        errorBuilder: (context, error, stackTrace) {
+                          return const Icon(
+                            Icons.restaurant_menu_rounded,
+                            size: 40,
+                            color: Color(0xFF2E7D32),
+                          );
+                        },
+                      ),
+                    ),
+                  ),
                 ),
               ),
               const SizedBox(height: 24),
@@ -97,7 +113,10 @@ class _LoginPageState extends State<LoginPage> {
               Center(
                 child: Text(
                   'Login to continue',
-                  style: GoogleFonts.inter(fontSize: 15, color: Colors.grey[600]),
+                  style: GoogleFonts.inter(
+                    fontSize: 15,
+                    color: Colors.grey[600],
+                  ),
                 ),
               ),
               const SizedBox(height: 40),
@@ -106,13 +125,26 @@ class _LoginPageState extends State<LoginPage> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text('Username or Student ID', style: GoogleFonts.inter(fontSize: 14, fontWeight: FontWeight.w600, color: Colors.grey[800])),
+                    Text(
+                      'Username or Student ID',
+                      style: GoogleFonts.inter(
+                        fontSize: 14,
+                        fontWeight: FontWeight.w600,
+                        color: Colors.grey[800],
+                      ),
+                    ),
                     const SizedBox(height: 8),
                     TextFormField(
                       controller: _userController,
+                      textInputAction: TextInputAction.next,
+                      autocorrect: false,
+                      enableSuggestions: false,
                       decoration: InputDecoration(
                         hintText: 'Enter your username or student ID',
-                        prefixIcon: const Icon(Icons.person_outline, color: Colors.grey),
+                        prefixIcon: const Icon(
+                          Icons.person_outline,
+                          color: Colors.grey,
+                        ),
                         border: OutlineInputBorder(
                           borderRadius: BorderRadius.circular(14),
                           borderSide: BorderSide.none,
@@ -121,22 +153,43 @@ class _LoginPageState extends State<LoginPage> {
                         fillColor: Colors.grey.shade50,
                       ),
                       validator: (value) {
-                        if (value == null || value.isEmpty) return 'Please enter your username or student ID';
+                        if (value == null || value.isEmpty) {
+                          return 'Please enter your username or student ID';
+                        }
                         return null;
                       },
                     ),
                     const SizedBox(height: 20),
-                    Text('Password', style: GoogleFonts.inter(fontSize: 14, fontWeight: FontWeight.w600, color: Colors.grey[800])),
+                    Text(
+                      'Password',
+                      style: GoogleFonts.inter(
+                        fontSize: 14,
+                        fontWeight: FontWeight.w600,
+                        color: Colors.grey[800],
+                      ),
+                    ),
                     const SizedBox(height: 8),
                     TextFormField(
                       controller: _passwordController,
                       obscureText: _obscurePassword,
+                      textInputAction: TextInputAction.done,
+                      onFieldSubmitted: (_) => _handleLogin(),
                       decoration: InputDecoration(
                         hintText: 'Enter your password',
-                        prefixIcon: const Icon(Icons.lock_outline, color: Colors.grey),
+                        prefixIcon: const Icon(
+                          Icons.lock_outline,
+                          color: Colors.grey,
+                        ),
                         suffixIcon: IconButton(
-                          icon: Icon(_obscurePassword ? Icons.visibility_outlined : Icons.visibility_off_outlined, color: Colors.grey),
-                          onPressed: () => setState(() => _obscurePassword = !_obscurePassword),
+                          icon: Icon(
+                            _obscurePassword
+                                ? Icons.visibility_outlined
+                                : Icons.visibility_off_outlined,
+                            color: Colors.grey,
+                          ),
+                          onPressed: () => setState(
+                            () => _obscurePassword = !_obscurePassword,
+                          ),
                         ),
                         border: OutlineInputBorder(
                           borderRadius: BorderRadius.circular(14),
@@ -146,8 +199,9 @@ class _LoginPageState extends State<LoginPage> {
                         fillColor: Colors.grey.shade50,
                       ),
                       validator: (value) {
-                        if (value == null || value.isEmpty) return 'Please enter your password';
-                        if (value.length < 6) return 'Password must be at least 6 characters';
+                        if (value == null || value.isEmpty) {
+                          return 'Please enter your password';
+                        }
                         return null;
                       },
                     ),
@@ -155,8 +209,14 @@ class _LoginPageState extends State<LoginPage> {
                     Align(
                       alignment: Alignment.centerRight,
                       child: TextButton(
-                        onPressed: () {}, // Forgot password logic
-                        child: Text('Forgot Password?', style: GoogleFonts.inter(fontSize: 13, color: primaryColor)),
+                        onPressed: () {},
+                        child: Text(
+                          'Forgot Password?',
+                          style: GoogleFonts.inter(
+                            fontSize: 13,
+                            color: primaryColor,
+                          ),
+                        ),
                       ),
                     ),
                     const SizedBox(height: 24),
@@ -170,10 +230,18 @@ class _LoginPageState extends State<LoginPage> {
                               style: ElevatedButton.styleFrom(
                                 backgroundColor: primaryColor,
                                 foregroundColor: Colors.white,
-                                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(14),
+                                ),
                                 elevation: 2,
                               ),
-                              child: Text('Login', style: GoogleFonts.inter(fontSize: 16, fontWeight: FontWeight.w600)),
+                              child: Text(
+                                'Login',
+                                style: GoogleFonts.inter(
+                                  fontSize: 16,
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
                             ),
                     ),
                   ],
@@ -183,12 +251,26 @@ class _LoginPageState extends State<LoginPage> {
               Row(
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
-                  Text("Don't have an account?", style: GoogleFonts.inter(color: Colors.grey[600])),
+                  Text(
+                    "Don't have an account?",
+                    style: GoogleFonts.inter(color: Colors.grey[600]),
+                  ),
                   TextButton(
                     onPressed: () {
-                      Navigator.push(context, MaterialPageRoute(builder: (context) => const RegisterPage()));
+                      Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                          builder: (context) => const RegisterPage(),
+                        ),
+                      );
                     },
-                    child: Text('Sign Up', style: GoogleFonts.inter(color: primaryColor, fontWeight: FontWeight.w600)),
+                    child: Text(
+                      'Sign Up',
+                      style: GoogleFonts.inter(
+                        color: primaryColor,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
                   ),
                 ],
               ),
