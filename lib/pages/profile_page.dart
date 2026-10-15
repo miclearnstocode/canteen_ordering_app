@@ -8,7 +8,6 @@ import 'rewards_page.dart';
 import 'my_information_page.dart';
 import '../services/auth_service.dart';
 import '../models/user_model.dart';
-import 'login_page.dart';
 
 class ProfilePage extends StatefulWidget {
   const ProfilePage({super.key});
@@ -84,13 +83,6 @@ class _ProfilePageState extends State<ProfilePage> {
               Navigator.pop(dialogContext);
               try {
                 await _authService.signOut();
-                if (context.mounted) {
-                  Navigator.pushAndRemoveUntil(
-                    context,
-                    MaterialPageRoute(builder: (context) => const LoginPage()),
-                    (route) => false,
-                  );
-                }
               } catch (e) {
                 if (context.mounted) {
                   ScaffoldMessenger.of(context).showSnackBar(

@@ -305,8 +305,6 @@ class AuthService {
     }
   }
 
-  /// Signs out the Firebase user and the Google session. Does NOT write
-  /// to Firestore — avoids racing with the next login's user-doc read.
   Future<void> signOut() async {
     try {
       if (!kIsWeb && _googleInitialized) {

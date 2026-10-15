@@ -1,3 +1,4 @@
+// lib/auth_gate.dart
 import 'dart:async';
 
 import 'package:flutter/material.dart';
@@ -25,6 +26,7 @@ class _AuthGateState extends State<AuthGate> {
   bool _isLoading = true;
   AppUser? _currentUser;
   String? _cartLoadedForUid;
+  int _authHandlerToken = 0;
 
   @override
   void initState() {
@@ -40,13 +42,20 @@ class _AuthGateState extends State<AuthGate> {
 
   Future<void> _onAuthChanged(User? user) async {
     if (!mounted) return;
+
+    // Claim this auth event. Any handler started before this one is now
+    // stale and will bail out at its next token check.
+    final token = ++_authHandlerToken;
+
     setState(() => _isLoading = true);
 
     try {
+      // ── Signed out ──
       if (user == null) {
         _cartLoadedForUid = null;
         _studentState.clearCart();
-        if (!mounted) return;
+
+        if (!mounted || token != _authHandlerToken) return;
         setState(() {
           _currentUser = null;
           _isLoading = false;
@@ -63,9 +72,8 @@ class _AuthGateState extends State<AuthGate> {
         appUser = null;
       }
 
-      // Fallback: if the users/{uid} doc read failed for any reason,
-      // synthesise a minimal AppUser from the Firebase Auth record so
-      // the user can still get past the login form.
+      if (!mounted || token != _authHandlerToken) return;
+
       if (appUser == null) {
         final fallbackIsAdmin =
             (user.email ?? '').toLowerCase() == 'canteenadmin1@gmail.com';
@@ -87,14 +95,15 @@ class _AuthGateState extends State<AuthGate> {
         debugPrint('[AuthGate] cart load failed: $e');
       }
 
-      if (!mounted) return;
+      // Final staleness check before committing state.
+      if (!mounted || token != _authHandlerToken) return;
       setState(() {
         _currentUser = appUser;
         _isLoading = false;
       });
     } catch (e, st) {
       debugPrint('[AuthGate] auth handler failed: $e\n$st');
-      if (!mounted) return;
+      if (!mounted || token != _authHandlerToken) return;
       setState(() {
         _currentUser = null;
         _isLoading = false;

@@ -3,7 +3,6 @@ import 'package:google_fonts/google_fonts.dart';
 import 'admin_dashboard_tabs.dart';
 import 'admin_second_tabs.dart';
 import '../../services/auth_service.dart';
-import '../login_page.dart';
 
 class AdminDashboardShell extends StatefulWidget {
   const AdminDashboardShell({super.key});
@@ -62,13 +61,6 @@ class _AdminDashboardShellState extends State<AdminDashboardShell> {
                 final authService = AuthService();
                 await authService.signOut();
               } catch (_) {}
-              if (mounted) {
-                Navigator.pushAndRemoveUntil(
-                  context,
-                  MaterialPageRoute(builder: (context) => const LoginPage()),
-                  (route) => false,
-                );
-              }
             },
             style: ElevatedButton.styleFrom(
               backgroundColor: Colors.red.shade600,
