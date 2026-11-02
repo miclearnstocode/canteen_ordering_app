@@ -103,6 +103,19 @@ service cloud.firestore {
     }
 
 
+    // CREDIT TOPUP REQUESTS
+
+    match /credit_topup_requests/{requestId} {
+      allow read, write: if isAdmin();
+      allow read: if isSignedIn()
+        && request.auth.uid == resource.data.uid;
+      allow update: if isSignedIn()
+        && request.auth.uid == resource.data.uid
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status'])
+        && request.resource.data.status == 'cancelled';
+    }
+
+
     // INVENTORY UNITS
 
     match /inventory_units/{unitId} {

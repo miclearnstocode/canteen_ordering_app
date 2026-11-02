@@ -135,6 +135,115 @@ class HomeScreen extends StatelessWidget {
                 ),
                 const SizedBox(height: 18),
 
+                // ── Active Counter Top-Up OTP Banner (LIVE) ──
+                if (user != null)
+                  StreamBuilder<QuerySnapshot>(
+                    stream: firestore
+                        .collection('credit_topup_requests')
+                        .where('uid', isEqualTo: user.uid)
+                        .where('status', isEqualTo: 'pending')
+                        .limit(1)
+                        .snapshots(),
+                    builder: (context, otpSnap) {
+                      if (!otpSnap.hasData || otpSnap.data!.docs.isEmpty) {
+                        return const SizedBox.shrink();
+                      }
+                      final reqDoc = otpSnap.data!.docs.first;
+                      final reqData = reqDoc.data() as Map<String, dynamic>;
+                      final amount =
+                          (reqData['amount'] as num?)?.toDouble() ?? 0.0;
+                      final otpCode = (reqData['otp'] ?? '').toString();
+                      if (otpCode.isEmpty) return const SizedBox.shrink();
+
+                      return Container(
+                        width: double.infinity,
+                        margin: const EdgeInsets.only(bottom: 16),
+                        padding: const EdgeInsets.all(16),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFFE8F5E9),
+                          borderRadius: BorderRadius.circular(18),
+                          border: Border.all(
+                              color: const Color(0xFFA5D6A7), width: 1.5),
+                          boxShadow: [
+                            BoxShadow(
+                              color: Colors.green.withValues(alpha: 0.1),
+                              blurRadius: 8,
+                              offset: const Offset(0, 3),
+                            ),
+                          ],
+                        ),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Row(
+                              children: [
+                                const Icon(Icons.verified_user,
+                                    color: Color(0xFF2E7D32), size: 20),
+                                const SizedBox(width: 8),
+                                Expanded(
+                                  child: Text(
+                                    'Counter Top-Up in Progress',
+                                    style: GoogleFonts.poppins(
+                                      fontWeight: FontWeight.bold,
+                                      fontSize: 14,
+                                      color: const Color(0xFF1B5E20),
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ),
+                            const SizedBox(height: 6),
+                            Text(
+                              'Amount: ₱' + amount.toStringAsFixed(2),
+                              style: GoogleFonts.poppins(
+                                fontSize: 13,
+                                fontWeight: FontWeight.w600,
+                                color: Colors.black87,
+                              ),
+                            ),
+                            const SizedBox(height: 8),
+                            Container(
+                              padding: const EdgeInsets.symmetric(
+                                  horizontal: 14, vertical: 8),
+                              decoration: BoxDecoration(
+                                color: Colors.white,
+                                borderRadius: BorderRadius.circular(10),
+                                border:
+                                    Border.all(color: const Color(0xFF81C784)),
+                              ),
+                              child: Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  Text(
+                                    'Your OTP: ',
+                                    style: GoogleFonts.poppins(
+                                        fontSize: 13,
+                                        color: Colors.grey.shade700),
+                                  ),
+                                  Text(
+                                    otpCode,
+                                    style: GoogleFonts.poppins(
+                                      fontSize: 20,
+                                      fontWeight: FontWeight.w800,
+                                      letterSpacing: 4,
+                                      color: const Color(0xFF2E7D32),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                            const SizedBox(height: 6),
+                            Text(
+                              'Read this 6-digit code to the cashier to confirm your top-up.',
+                              style: GoogleFonts.poppins(
+                                  fontSize: 11, color: Colors.grey.shade700),
+                            ),
+                          ],
+                        ),
+                      );
+                    },
+                  ),
+
                 // ── Loyalty Points Card (LIVE) ──
                 Container(
                   width: double.infinity,

@@ -2111,9 +2111,7 @@ class _DialogRow {
   _DialogRow({required this.label, required this.value});
 }
 
-// ==========================================
-// 9. ADMIN ACCOUNTS PAGE (REWORKED)
-// ==========================================
+// 9. ADMIN ACCOUNTS PAGE
 class AdminAccountsPage extends StatefulWidget {
   const AdminAccountsPage({super.key});
 
@@ -2209,13 +2207,16 @@ class _AdminAccountsPageState extends State<AdminAccountsPage> {
                       course: courseCtrl.text.trim(),
                       tempPassword: pwCtrl.text.trim(),
                     );
+                    // ignore: use_build_context_synchronously
                     if (mounted) Navigator.pop(ctx);
+                    // ignore: use_build_context_synchronously
                     ScaffoldMessenger.of(context).showSnackBar(
                       SnackBar(
                           content: Text('Pending account for ${nameCtrl.text} created'),
                           backgroundColor: green),
                     );
                   } catch (e) {
+                    // ignore: use_build_context_synchronously
                     ScaffoldMessenger.of(context).showSnackBar(
                       SnackBar(content: Text('Error: $e')),
                     );
@@ -2322,102 +2323,367 @@ class _AdminAccountsPageState extends State<AdminAccountsPage> {
         ),
       );
 
-  // ---- Add credit ----
   Future<void> _showAddCreditDialog(AppUser user) async {
     final amountCtrl = TextEditingController();
     final noteCtrl = TextEditingController();
+    final otpCtrl = TextEditingController();
+
+    if (user.email.trim().isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('This student has no email on file. Cannot send OTP.'),
+        ),
+      );
+      return;
+    }
+
+    // Persistent state across the two phases (survives setDialogState).
+    String? requestId;
+    double? pendingAmount;
+    String? pendingOtp;
+    bool sentViaEmail = false;
+    bool sendingOtp = false;
+    bool confirming = false;
 
     await showDialog(
       context: context,
-      builder: (ctx) => AlertDialog(
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
-        title: Text('Add Credit — ${user.displayName}',
-            style: GoogleFonts.poppins(fontWeight: FontWeight.bold, fontSize: 16)),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Container(
-              padding: const EdgeInsets.all(10),
-              decoration: BoxDecoration(
-                color: green.withValues(alpha: 0.08),
-                borderRadius: BorderRadius.circular(10),
-              ),
-              child: Row(
+      barrierDismissible: false,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setDialogState) {
+          final inOtpPhase = requestId != null;
+
+          return AlertDialog(
+            shape:
+                RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
+            title: Text(
+              inOtpPhase
+                  ? 'Confirm with Student OTP'
+                  : 'Add Credit — ${user.displayName}',
+              style: GoogleFonts.poppins(
+                  fontWeight: FontWeight.bold, fontSize: 16),
+            ),
+            content: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Icon(Icons.account_balance_wallet, color: green, size: 18),
-                  const SizedBox(width: 8),
-                  Text('Current balance: ₱${user.credits.toStringAsFixed(2)}',
+                  // ── Balance banner ──
+                  Container(
+                    padding: const EdgeInsets.all(10),
+                    decoration: BoxDecoration(
+                      color: green.withValues(alpha: 0.08),
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                    child: Row(
+                      children: [
+                        Icon(Icons.account_balance_wallet,
+                            color: green, size: 18),
+                        const SizedBox(width: 8),
+                        Text(
+                          'Current balance: ₱${user.credits.toStringAsFixed(2)}',
+                          style: GoogleFonts.poppins(
+                              fontWeight: FontWeight.w600, fontSize: 13),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 14),
+
+                  if (!inOtpPhase) ...[
+                    // ── PHASE 1: amount + note ──
+                    TextField(
+                      controller: amountCtrl,
+                      keyboardType:
+                          const TextInputType.numberWithOptions(decimal: true),
+                      enabled: !sendingOtp,
+                      decoration: InputDecoration(
+                        labelText: 'Amount received (₱)',
+                        prefixText: '₱ ',
+                        helperText: '1 credit = 1 peso',
+                        border: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(10)),
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    TextField(
+                      controller: noteCtrl,
+                      enabled: !sendingOtp,
+                      decoration: InputDecoration(
+                        labelText: 'Note (optional)',
+                        hintText: 'e.g. Cash top-up at counter',
+                        border: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(10)),
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    Container(
+                      padding: const EdgeInsets.all(10),
+                      decoration: BoxDecoration(
+                        color: Colors.amber.shade50,
+                        borderRadius: BorderRadius.circular(8),
+                        border: Border.all(color: Colors.amber.shade200),
+                      ),
+                      child: Row(
+                        children: [
+                          Icon(Icons.info_outline,
+                              size: 16, color: Colors.amber.shade800),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: Text(
+                              'An OTP will be emailed to ${user.email}. '
+                              'Ask the student to read it to you, then enter '
+                              'it on the next step to release the credits.',
+                              style: GoogleFonts.poppins(
+                                  fontSize: 11,
+                                  color: Colors.amber.shade900),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ] else ...[
+                    // ── PHASE 2: OTP entry ──
+                    Text(
+                      sentViaEmail
+                          ? 'A 6-digit code was emailed to:'
+                          : 'Email failed — read this OTP to the student:',
+                      style: GoogleFonts.poppins(fontSize: 12),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      user.email,
                       style: GoogleFonts.poppins(
-                          fontWeight: FontWeight.w600, fontSize: 13)),
+                          fontSize: 13, fontWeight: FontWeight.w600),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      'Amount to add: ₱${(pendingAmount ?? 0).toStringAsFixed(2)}',
+                      style: GoogleFonts.poppins(
+                          fontSize: 12, color: green),
+                    ),
+                    if (!sentViaEmail && pendingOtp != null) ...[
+                      const SizedBox(height: 8),
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 12, vertical: 8),
+                        decoration: BoxDecoration(
+                          color: Colors.blue.shade50,
+                          borderRadius: BorderRadius.circular(10),
+                          border: Border.all(color: Colors.blue.shade200),
+                        ),
+                        child: Row(
+                          children: [
+                            Icon(Icons.vpn_key_rounded,
+                                size: 16, color: Colors.blue.shade800),
+                            const SizedBox(width: 8),
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    'Counter OTP: $pendingOtp',
+                                    style: GoogleFonts.poppins(
+                                      fontSize: 12,
+                                      fontWeight: FontWeight.bold,
+                                      color: Colors.blue.shade900,
+                                    ),
+                                  ),
+                                  Text(
+                                    'Read this to the student. Tap to autofill.',
+                                    style: GoogleFonts.poppins(
+                                      fontSize: 10,
+                                      color: Colors.blue.shade700,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                            TextButton(
+                              style: TextButton.styleFrom(
+                                padding: EdgeInsets.zero,
+                                minimumSize: const Size(48, 28),
+                                tapTargetSize:
+                                    MaterialTapTargetSize.shrinkWrap,
+                              ),
+                              onPressed: () {
+                                otpCtrl.text = pendingOtp!;
+                              },
+                              child: const Text('Autofill',
+                                  style: TextStyle(fontSize: 11)),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                    const SizedBox(height: 12),
+                    TextField(
+                      controller: otpCtrl,
+                      keyboardType: TextInputType.number,
+                      maxLength: 6,
+                      enabled: !confirming,
+                      textAlign: TextAlign.center,
+                      style: GoogleFonts.poppins(
+                          fontSize: 22,
+                          fontWeight: FontWeight.bold,
+                          letterSpacing: 8),
+                      decoration: InputDecoration(
+                        counterText: '',
+                        hintText: '••••••',
+                        border: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(10)),
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    Text(
+                      'Ask the student to read the code from their email. '
+                      'Code expires in 10 minutes.',
+                      style: GoogleFonts.poppins(
+                          fontSize: 11, color: Colors.grey.shade600),
+                    ),
+                  ],
                 ],
               ),
             ),
-            const SizedBox(height: 14),
-            TextField(
-              controller: amountCtrl,
-              keyboardType:
-                  const TextInputType.numberWithOptions(decimal: true),
-              decoration: InputDecoration(
-                labelText: 'Amount received (₱)',
-                prefixText: '₱ ',
-                helperText: '1 credit = 1 peso',
-                border:
-                    OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
+            actions: [
+              TextButton(
+                onPressed: (sendingOtp || confirming)
+                    ? null
+                    : () {
+                        if (requestId != null) {
+                          _service.cancelCreditTopup(requestId!);
+                        }
+                        Navigator.pop(ctx);
+                      },
+                child: const Text('Cancel'),
               ),
-            ),
-            const SizedBox(height: 12),
-            TextField(
-              controller: noteCtrl,
-              decoration: InputDecoration(
-                labelText: 'Note (optional)',
-                hintText: 'e.g. Cash top-up at counter',
-                border:
-                    OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
-              ),
-            ),
-          ],
-        ),
-        actions: [
-          TextButton(
-              onPressed: () => Navigator.pop(ctx),
-              child: const Text('Cancel')),
-          ElevatedButton(
-            style: ElevatedButton.styleFrom(
-                backgroundColor: green, foregroundColor: Colors.white),
-            onPressed: () async {
-              final amount = double.tryParse(amountCtrl.text.trim()) ?? 0;
-              if (amount <= 0) {
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(content: Text('Enter a valid amount')),
-                );
-                return;
-              }
-              try {
-                await _service.addCredits(
-                  uid: user.uid,
-                  amountInPesos: amount,
-                  note: noteCtrl.text.trim(),
-                );
-                if (mounted) Navigator.pop(ctx);
-                ScaffoldMessenger.of(context).showSnackBar(
-                  SnackBar(
-                    content: Text(
-                        'Added ₱${amount.toStringAsFixed(2)} to ${user.displayName}'),
-                    backgroundColor: green,
-                  ),
-                );
-              } catch (e) {
-                ScaffoldMessenger.of(context).showSnackBar(
-                  SnackBar(content: Text('Error: $e')),
-                );
-              }
-            },
-            child: const Text('Add Credits'),
-          ),
-        ],
+              if (!inOtpPhase)
+                ElevatedButton(
+                  style: ElevatedButton.styleFrom(
+                      backgroundColor: green,
+                      foregroundColor: Colors.white),
+                  onPressed: sendingOtp
+                      ? null
+                      : () async {
+                          final amount =
+                              double.tryParse(amountCtrl.text.trim()) ?? 0;
+                          if (amount <= 0) {
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              const SnackBar(
+                                  content: Text('Enter a valid amount')),
+                            );
+                            return;
+                          }
+                          setDialogState(() => sendingOtp = true);
+                          try {
+                            final result = await _service.requestCreditOtp(
+                              uid: user.uid,
+                              studentEmail: user.email,
+                              amountInPesos: amount,
+                              note: noteCtrl.text.trim(),
+                            );
+                            if (!ctx.mounted) return;
+                            setDialogState(() {
+                              requestId = result.requestId;
+                              pendingAmount = amount;
+                              pendingOtp = result.otp;
+                              sentViaEmail = result.sentViaEmail;
+                              sendingOtp = false;
+                            });
+                            // ignore: use_build_context_synchronously
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              SnackBar(
+                                content: Text(result.sentViaEmail
+                                    ? 'OTP sent to ${user.email}. Ask the student for it.'
+                                    : 'Email failed. Read the OTP to the student.'),
+                                backgroundColor: green,
+                              ),
+                            );
+                          } catch (e) {
+                            if (!ctx.mounted) return;
+                            setDialogState(() => sendingOtp = false);
+                            // ignore: use_build_context_synchronously
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              SnackBar(
+                                  content: Text(e
+                                      .toString()
+                                      .replaceFirst('Exception: ', '')),
+                                  backgroundColor: Colors.red.shade600),
+                            );
+                          }
+                        },
+                  child: sendingOtp
+                      ? const SizedBox(
+                          width: 16,
+                          height: 16,
+                          child: CircularProgressIndicator(
+                              strokeWidth: 2, color: Colors.white),
+                        )
+                      : const Text('Send OTP'),
+                )
+              else
+                ElevatedButton(
+                  style: ElevatedButton.styleFrom(
+                      backgroundColor: green,
+                      foregroundColor: Colors.white),
+                  onPressed: confirming
+                      ? null
+                      : () async {
+                          final otp = otpCtrl.text.trim();
+                          if (otp.length != 6) {
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              const SnackBar(
+                                  content:
+                                      Text('Enter the 6-digit OTP')),
+                            );
+                            return;
+                          }
+                          setDialogState(() => confirming = true);
+                          try {
+                            await _service.confirmCreditTopup(
+                              requestId: requestId!,
+                              enteredOtp: otp,
+                            );
+                            if (!ctx.mounted) return;
+                            Navigator.pop(ctx);
+                            // ignore: use_build_context_synchronously
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              SnackBar(
+                                content: Text(
+                                    'Added ₱${(pendingAmount ?? 0).toStringAsFixed(2)} to ${user.displayName}'),
+                                backgroundColor: green,
+                              ),
+                            );
+                          } catch (e) {
+                            if (!ctx.mounted) return;
+                            setDialogState(() => confirming = false);
+                            // ignore: use_build_context_synchronously
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              SnackBar(
+                                  content: Text(e
+                                      .toString()
+                                      .replaceFirst('Exception: ', '')),
+                                  backgroundColor: Colors.red.shade600),
+                            );
+                          }
+                        },
+                  child: confirming
+                      ? const SizedBox(
+                          width: 16,
+                          height: 16,
+                          child: CircularProgressIndicator(
+                              strokeWidth: 2, color: Colors.white),
+                        )
+                      : const Text('Confirm Top-up'),
+                ),
+            ],
+          );
+        },
       ),
     );
+
+    amountCtrl.dispose();
+    noteCtrl.dispose();
+    otpCtrl.dispose();
   }
 
   @override
