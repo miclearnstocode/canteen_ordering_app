@@ -839,9 +839,8 @@ class _PendingClaimsList extends StatelessWidget {
   }
 }
 
-// ==========================================
+
 // 7. ADMIN PAYMENTS PAGE
-// ==========================================
 class AdminPaymentsPage extends StatefulWidget {
   const AdminPaymentsPage({super.key});
 
@@ -902,6 +901,31 @@ class _AdminPaymentsPageState extends State<AdminPaymentsPage> {
     return '${months[local.month - 1]} ${local.day}, $h12:$min $ampm';
   }
 
+  String _formatTimeOnly(DateTime? dt) {
+    if (dt == null) return '—';
+    final local = dt.toLocal();
+    final h12 = local.hour % 12 == 0 ? 12 : local.hour % 12;
+    final ampm = local.hour >= 12 ? 'PM' : 'AM';
+    final min = local.minute.toString().padLeft(2, '0');
+    return '$h12:$min $ampm';
+  }
+
+  String _formatDayHeader(DateTime dt) {
+    final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
+    final yesterday = today.subtract(const Duration(days: 1));
+    final dateToCheck = DateTime(dt.year, dt.month, dt.day);
+
+    if (dateToCheck == today) return 'Today';
+    if (dateToCheck == yesterday) return 'Yesterday';
+
+    final months = [
+      'January', 'February', 'March', 'April', 'May', 'June',
+      'July', 'August', 'September', 'October', 'November', 'December'
+    ];
+    return '${months[dt.month - 1]} ${dt.day}, ${dt.year}';
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -916,7 +940,7 @@ class _AdminPaymentsPageState extends State<AdminPaymentsPage> {
                     fontSize: 24, fontWeight: FontWeight.w700)),
             const SizedBox(height: 4),
             Text(
-              'Live credit top-ups and order payments from students.',
+              'Monitor daily top-ups and order payments.',
               style: GoogleFonts.poppins(
                   fontSize: 12, color: Colors.grey.shade600),
             ),
@@ -936,16 +960,13 @@ class _AdminPaymentsPageState extends State<AdminPaymentsPage> {
 
             Expanded(
               child: StreamBuilder<QuerySnapshot>(
-                // No orderBy → no index needed; we sort client-side.
                 stream: _firestore
                     .collection('credit_transactions')
-                    .limit(200)
+                    .limit(300) // Fetch a wide range for grouping
                     .snapshots(),
                 builder: (context, snapshot) {
-                  if (snapshot.connectionState ==
-                      ConnectionState.waiting) {
-                    return const Center(
-                        child: CircularProgressIndicator());
+                  if (snapshot.connectionState == ConnectionState.waiting) {
+                    return const Center(child: CircularProgressIndicator());
                   }
                   if (snapshot.hasError) {
                     return Center(
@@ -955,8 +976,7 @@ class _AdminPaymentsPageState extends State<AdminPaymentsPage> {
                           'Failed to load payments:\n${snapshot.error}',
                           textAlign: TextAlign.center,
                           style: GoogleFonts.poppins(
-                              color: Colors.red.shade700,
-                              fontSize: 12),
+                              color: Colors.red.shade700, fontSize: 12),
                         ),
                       ),
                     );
@@ -967,21 +987,32 @@ class _AdminPaymentsPageState extends State<AdminPaymentsPage> {
                       .map((d) => _CreditTx.fromDoc(d))
                       .toList()
                     ..sort((a, b) {
-                      final aT = a.timestamp ??
-                          DateTime.fromMillisecondsSinceEpoch(0);
-                      final bT = b.timestamp ??
-                          DateTime.fromMillisecondsSinceEpoch(0);
+                      final aT = a.timestamp ?? DateTime.fromMillisecondsSinceEpoch(0);
+                      final bT = b.timestamp ?? DateTime.fromMillisecondsSinceEpoch(0);
                       return bT.compareTo(aT);
                     });
 
-                  // ── Apply filter ──
+                  // ── Apply overall filter ──
                   final filtered = _selectedFilter == 'all'
                       ? allTx
-                      : allTx
-                          .where((t) => t.type == _selectedFilter)
-                          .toList();
+                      : allTx.where((t) => t.type == _selectedFilter).toList();
 
-                  // ── Aggregate totals for the header strip ──
+                  // ── Daily Top-ups Math ──
+                  final now = DateTime.now();
+                  final todayStart = DateTime(now.year, now.month, now.day);
+                  
+                  final todayTopUps = allTx.where((t) {
+                    return t.type == 'credit' &&
+                        t.timestamp != null &&
+                        t.timestamp!.isAfter(todayStart);
+                  }).toList();
+
+                  double todayTopUpTotal = 0;
+                  for (final t in todayTopUps) {
+                    todayTopUpTotal += t.amount;
+                  }
+
+                  // ── All-time Totals ──
                   double totalTopUps = 0;
                   double totalSpent = 0;
                   for (final t in allTx) {
@@ -989,190 +1020,336 @@ class _AdminPaymentsPageState extends State<AdminPaymentsPage> {
                     if (t.type == 'debit') totalSpent += t.amount;
                   }
 
-                  return Column(
-                    children: [
-                      // ── Summary strip ──
-                      LayoutBuilder(
-                        builder: (context, constraints) {
-                          final wide = constraints.maxWidth >= 600;
-                          final w = wide
-                              ? (constraints.maxWidth - 16) / 2
-                              : constraints.maxWidth;
-                          return Wrap(
-                            spacing: 16,
-                            runSpacing: 12,
-                            children: [
-                              SizedBox(
-                                width: w,
-                                child: _summaryCard(
-                                  label: 'Total Top-ups Received',
-                                  amount: totalTopUps,
-                                  icon: Icons.south_west,
-                                  color: green,
-                                ),
-                              ),
-                              SizedBox(
-                                width: w,
-                                child: _summaryCard(
-                                  label: 'Total Spent on Orders',
-                                  amount: totalSpent,
-                                  icon: Icons.north_east,
-                                  color: debitColor,
-                                ),
-                              ),
-                            ],
-                          );
-                        },
-                      ),
-                      const SizedBox(height: 16),
+                  // ── Grouping Logic ──
+                  final Map<String, List<_CreditTx>> groupedTx = {};
+                  for (final tx in filtered) {
+                    final dateStr = tx.timestamp != null 
+                        ? _formatDayHeader(tx.timestamp!) 
+                        : 'Unknown Date';
+                    if (!groupedTx.containsKey(dateStr)) {
+                      groupedTx[dateStr] = [];
+                    }
+                    groupedTx[dateStr]!.add(tx);
+                  }
 
-                      // ── Transactions list ──
-                      Expanded(
-                        child: Container(
-                          padding: const EdgeInsets.all(8),
-                          decoration: BoxDecoration(
-                            color: Colors.white,
-                            borderRadius: BorderRadius.circular(18),
-                            border: Border.all(color: Colors.grey.shade200),
+                  // Create a flattened list of widgets to render inside CustomScrollView
+                  final List<Widget> listWidgets = [];
+                  
+                  groupedTx.forEach((dateHeader, txs) {
+                    // Date Header
+                    listWidgets.add(
+                      Padding(
+                        padding: const EdgeInsets.only(top: 16, bottom: 8, left: 4),
+                        child: Text(
+                          dateHeader,
+                          style: GoogleFonts.poppins(
+                            fontSize: 14,
+                            fontWeight: FontWeight.w700,
+                            color: Colors.grey.shade800,
                           ),
-                          child: filtered.isEmpty
-                              ? Center(
-                                  child: Column(
-                                    mainAxisAlignment:
-                                        MainAxisAlignment.center,
-                                    children: [
-                                      Icon(Icons.receipt_long_outlined,
-                                          size: 60,
-                                          color: Colors.grey.shade400),
-                                      const SizedBox(height: 12),
-                                      Text(
-                                        'No transactions yet',
-                                        style: GoogleFonts.poppins(
-                                            color: Colors.grey.shade600),
-                                      ),
-                                    ],
-                                  ),
-                                )
-                              : ListView.separated(
-                                  itemCount: filtered.length,
-                                  separatorBuilder: (_, __) => Divider(
-                                      color: Colors.grey.shade100),
-                                  itemBuilder: (context, i) {
-                                    final tx = filtered[i];
-                                    final isCredit = tx.type == 'credit';
-                                    final color =
-                                        isCredit ? green : debitColor;
-                                    final icon = isCredit
-                                        ? Icons.add_card
-                                        : Icons.shopping_bag_outlined;
-                                    final label = isCredit
-                                        ? 'Credit Top-up'
-                                        : 'Order Payment';
-                                    final sign = isCredit ? '+' : '-';
-                                    final cachedName = _nameFor(tx.uid);
+                        ),
+                      ),
+                    );
+                    
+                    // Transactions for this date
+                    listWidgets.add(
+                      Container(
+                        decoration: BoxDecoration(
+                          color: Colors.white,
+                          borderRadius: BorderRadius.circular(18),
+                          border: Border.all(color: Colors.grey.shade200),
+                        ),
+                        child: ListView.separated(
+                          shrinkWrap: true,
+                          physics: const NeverScrollableScrollPhysics(),
+                          itemCount: txs.length,
+                          separatorBuilder: (_, __) => Divider(color: Colors.grey.shade100, height: 1),
+                          itemBuilder: (context, i) {
+                            final tx = txs[i];
+                            final isCredit = tx.type == 'credit';
+                            final color = isCredit ? green : debitColor;
+                            final icon = isCredit ? Icons.add_card : Icons.shopping_bag_outlined;
+                            final label = isCredit ? 'Credit Top-up' : 'Order Payment';
+                            final sign = isCredit ? '+' : '-';
+                            final cachedName = _nameFor(tx.uid);
 
-                                    return ListTile(
-                                      contentPadding:
-                                          const EdgeInsets.symmetric(
-                                              horizontal: 12,
-                                              vertical: 6),
-                                      leading: Container(
-                                        padding:
-                                            const EdgeInsets.all(10),
-                                        decoration: BoxDecoration(
-                                          color: color.withValues(
-                                              alpha: 0.1),
-                                          borderRadius:
-                                              BorderRadius.circular(10),
-                                        ),
-                                        child: Icon(icon,
-                                            color: color, size: 20),
+                            return ListTile(
+                              contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                              leading: Container(
+                                padding: const EdgeInsets.all(10),
+                                decoration: BoxDecoration(
+                                  color: color.withValues(alpha: 0.1),
+                                  borderRadius: BorderRadius.circular(10),
+                                ),
+                                child: Icon(icon, color: color, size: 20),
+                              ),
+                              title: Row(
+                                children: [
+                                  Expanded(
+                                    child: Text(
+                                      cachedName ?? 'Loading…',
+                                      style: GoogleFonts.poppins(
+                                        fontWeight: FontWeight.w600,
+                                        fontSize: 14,
+                                        color: cachedName == null ? Colors.grey.shade500 : Colors.black87,
                                       ),
-                                      title: Row(
+                                      overflow: TextOverflow.ellipsis,
+                                    ),
+                                  ),
+                                  Container(
+                                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                                    decoration: BoxDecoration(
+                                      color: color.withValues(alpha: 0.12),
+                                      borderRadius: BorderRadius.circular(6),
+                                    ),
+                                    child: Text(
+                                      label,
+                                      style: GoogleFonts.poppins(
+                                        fontSize: 10,
+                                        fontWeight: FontWeight.bold,
+                                        color: color,
+                                      ),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                              subtitle: Padding(
+                                padding: const EdgeInsets.only(top: 4),
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Text(
+                                      tx.note.isEmpty
+                                          ? _formatTimeOnly(tx.timestamp)
+                                          : '${tx.note}  •  ${_formatTimeOnly(tx.timestamp)}',
+                                      style: GoogleFonts.poppins(
+                                          fontSize: 12, color: Colors.grey.shade600),
+                                      maxLines: 2,
+                                      overflow: TextOverflow.ellipsis,
+                                    ),
+                                    const SizedBox(height: 2),
+                                    Text(
+                                      'Balance after: ₱${tx.balanceAfter.toStringAsFixed(2)}',
+                                      style: GoogleFonts.poppins(
+                                          fontSize: 11, color: Colors.grey.shade500),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                              trailing: Text(
+                                '$sign₱${tx.amount.toStringAsFixed(2)}',
+                                style: GoogleFonts.poppins(
+                                  fontWeight: FontWeight.w700,
+                                  fontSize: 15,
+                                  color: color,
+                                ),
+                              ),
+                            );
+                          },
+                        ),
+                      ),
+                    );
+                  });
+
+                  return CustomScrollView(
+                    slivers: [
+                      // ═══════════════════════════════════════════
+                      // DAILY SUMMARY SECTION
+                      // ═══════════════════════════════════════════
+                      SliverToBoxAdapter(
+                        child: Column(
+                          children: [
+                            Container(
+                              padding: const EdgeInsets.all(16),
+                              decoration: BoxDecoration(
+                                gradient: LinearGradient(
+                                  colors: [green.withValues(alpha: 0.08), green.withValues(alpha: 0.02)],
+                                  begin: Alignment.topLeft,
+                                  end: Alignment.bottomRight,
+                                ),
+                                borderRadius: BorderRadius.circular(18),
+                                border: Border.all(color: green.withValues(alpha: 0.25)),
+                              ),
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Row(
+                                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                    children: [
+                                      Row(
                                         children: [
-                                          Expanded(
-                                            child: Text(
-                                              cachedName ??
-                                                  'Loading…',
-                                              style: GoogleFonts.poppins(
-                                                fontWeight: FontWeight.w600,
-                                                fontSize: 14,
-                                                color: cachedName == null
-                                                    ? Colors.grey.shade500
-                                                    : Colors.black87,
-                                              ),
-                                              overflow:
-                                                  TextOverflow.ellipsis,
-                                            ),
-                                          ),
                                           Container(
-                                            padding: const EdgeInsets
-                                                .symmetric(
-                                                horizontal: 8,
-                                                vertical: 2),
+                                            padding: const EdgeInsets.all(8),
                                             decoration: BoxDecoration(
-                                              color: color.withValues(
-                                                  alpha: 0.12),
-                                              borderRadius:
-                                                  BorderRadius.circular(
-                                                      6),
+                                              color: green.withValues(alpha: 0.15),
+                                              borderRadius: BorderRadius.circular(10),
                                             ),
-                                            child: Text(
-                                              label,
-                                              style: GoogleFonts.poppins(
-                                                fontSize: 10,
-                                                fontWeight:
-                                                    FontWeight.bold,
-                                                color: color,
+                                            child: Icon(Icons.trending_up_rounded, color: green, size: 20),
+                                          ),
+                                          const SizedBox(width: 12),
+                                          Column(
+                                            crossAxisAlignment: CrossAxisAlignment.start,
+                                            children: [
+                                              Text(
+                                                "Today's Credit Top-ups",
+                                                style: GoogleFonts.poppins(
+                                                  fontSize: 14,
+                                                  fontWeight: FontWeight.w700,
+                                                  color: Colors.grey.shade800,
+                                                ),
                                               ),
-                                            ),
+                                              Text(
+                                                '${todayTopUps.length} transactions',
+                                                style: GoogleFonts.poppins(
+                                                  fontSize: 11,
+                                                  color: Colors.grey.shade600,
+                                                ),
+                                              ),
+                                            ],
                                           ),
                                         ],
                                       ),
-                                      subtitle: Padding(
-                                        padding:
-                                            const EdgeInsets.only(top: 2),
-                                        child: Column(
-                                          crossAxisAlignment:
-                                              CrossAxisAlignment.start,
+                                      Text(
+                                        '₱${todayTopUpTotal.toStringAsFixed(2)}',
+                                        style: GoogleFonts.poppins(
+                                          fontSize: 22,
+                                          fontWeight: FontWeight.w800,
+                                          color: green,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                  if (todayTopUps.isNotEmpty) ...[
+                                    const SizedBox(height: 12),
+                                    const Divider(height: 1),
+                                    const SizedBox(height: 8),
+                                    ...todayTopUps.take(3).map((tx) {
+                                      final name = _nameFor(tx.uid) ?? 'Loading…';
+                                      return Padding(
+                                        padding: const EdgeInsets.only(bottom: 6.0),
+                                        child: Row(
                                           children: [
-                                            Text(
-                                              tx.note.isEmpty
-                                                  ? _formatDateTime(
-                                                      tx.timestamp)
-                                                  : '${tx.note}  •  ${_formatDateTime(tx.timestamp)}',
-                                              style: GoogleFonts.poppins(
-                                                  fontSize: 11,
-                                                  color: Colors
-                                                      .grey.shade600),
-                                              maxLines: 2,
-                                              overflow:
-                                                  TextOverflow.ellipsis,
+                                            Icon(Icons.person_outline, size: 14, color: Colors.grey.shade500),
+                                            const SizedBox(width: 6),
+                                            Expanded(
+                                              child: Text(
+                                                name,
+                                                style: GoogleFonts.poppins(
+                                                  fontSize: 12,
+                                                  color: Colors.grey.shade700,
+                                                  fontWeight: FontWeight.w500,
+                                                ),
+                                                overflow: TextOverflow.ellipsis,
+                                              ),
                                             ),
-                                            const SizedBox(height: 2),
                                             Text(
-                                              'Balance after: ₱${tx.balanceAfter.toStringAsFixed(2)}',
+                                              _formatTimeOnly(tx.timestamp),
                                               style: GoogleFonts.poppins(
-                                                  fontSize: 11,
-                                                  color: Colors
-                                                      .grey.shade500),
+                                                fontSize: 11,
+                                                color: Colors.grey.shade500,
+                                              ),
+                                            ),
+                                            const SizedBox(width: 12),
+                                            Text(
+                                              '+₱${tx.amount.toStringAsFixed(2)}',
+                                              style: GoogleFonts.poppins(
+                                                fontSize: 12,
+                                                fontWeight: FontWeight.w600,
+                                                color: green,
+                                              ),
                                             ),
                                           ],
                                         ),
-                                      ),
-                                      trailing: Text(
-                                        '$sign₱${tx.amount.toStringAsFixed(2)}',
-                                        style: GoogleFonts.poppins(
-                                          fontWeight: FontWeight.w700,
-                                          fontSize: 15,
-                                          color: color,
+                                      );
+                                    }),
+                                    if (todayTopUps.length > 3)
+                                      Padding(
+                                        padding: const EdgeInsets.only(top: 4),
+                                        child: Text(
+                                          '+ ${todayTopUps.length - 3} more today',
+                                          style: GoogleFonts.poppins(
+                                            fontSize: 10,
+                                            color: Colors.grey.shade500,
+                                            fontStyle: FontStyle.italic,
+                                          ),
                                         ),
                                       ),
-                                    );
-                                  },
-                                ),
+                                  ] else ...[
+                                    const SizedBox(height: 8),
+                                    Text(
+                                      'No top-ups recorded yet today.',
+                                      style: GoogleFonts.poppins(
+                                        fontSize: 12,
+                                        color: Colors.grey.shade500,
+                                        fontStyle: FontStyle.italic,
+                                      ),
+                                    ),
+                                  ],
+                                ],
+                              ),
+                            ),
+                            const SizedBox(height: 16),
+
+                            // ── Overall Summary strip ──
+                            LayoutBuilder(
+                              builder: (context, constraints) {
+                                final wide = constraints.maxWidth >= 600;
+                                final w = wide ? (constraints.maxWidth - 16) / 2 : constraints.maxWidth;
+                                return Wrap(
+                                  spacing: 16,
+                                  runSpacing: 12,
+                                  children: [
+                                    SizedBox(
+                                      width: w,
+                                      child: _summaryCard(
+                                        label: 'All-Time Top-ups',
+                                        amount: totalTopUps,
+                                        icon: Icons.south_west,
+                                        color: green,
+                                      ),
+                                    ),
+                                    SizedBox(
+                                      width: w,
+                                      child: _summaryCard(
+                                        label: 'All-Time Spent on Orders',
+                                        amount: totalSpent,
+                                        icon: Icons.north_east,
+                                        color: debitColor,
+                                      ),
+                                    ),
+                                  ],
+                                );
+                              },
+                            ),
+                            const SizedBox(height: 8),
+                          ],
                         ),
                       ),
+
+                      // ═══════════════════════════════════════════
+                      // GROUPED TRANSACTIONS LIST
+                      // ═══════════════════════════════════════════
+                      if (filtered.isEmpty)
+                        SliverFillRemaining(
+                          hasScrollBody: false,
+                          child: Center(
+                            child: Column(
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              children: [
+                                Icon(Icons.receipt_long_outlined, size: 60, color: Colors.grey.shade400),
+                                const SizedBox(height: 12),
+                                Text('No transactions found', style: GoogleFonts.poppins(color: Colors.grey.shade600)),
+                              ],
+                            ),
+                          ),
+                        )
+                      else
+                        SliverPadding(
+                          padding: const EdgeInsets.only(bottom: 40),
+                          sliver: SliverList(
+                            delegate: SliverChildListDelegate(listWidgets),
+                          ),
+                        ),
                     ],
                   );
                 },
@@ -1209,16 +1386,9 @@ class _AdminPaymentsPageState extends State<AdminPaymentsPage> {
     return Container(
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
-        gradient: LinearGradient(
-          colors: [
-            color.withValues(alpha: 0.08),
-            color.withValues(alpha: 0.02),
-          ],
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-        ),
+        color: Colors.white,
         borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: color.withValues(alpha: 0.25)),
+        border: Border.all(color: Colors.grey.shade200),
       ),
       child: Row(
         children: [
@@ -1238,16 +1408,16 @@ class _AdminPaymentsPageState extends State<AdminPaymentsPage> {
                 Text(
                   label,
                   style: GoogleFonts.poppins(
-                    fontSize: 12,
+                    fontSize: 11,
                     fontWeight: FontWeight.w600,
-                    color: Colors.grey.shade700,
+                    color: Colors.grey.shade600,
                   ),
                 ),
                 const SizedBox(height: 2),
                 Text(
                   '₱${amount.toStringAsFixed(2)}',
                   style: GoogleFonts.poppins(
-                    fontSize: 20,
+                    fontSize: 18,
                     fontWeight: FontWeight.w800,
                     color: color,
                   ),
@@ -1294,6 +1464,7 @@ class _CreditTx {
     );
   }
 }
+
 
 // 8. ADMIN REPORTS PAGE 
 class AdminReportsPage extends StatefulWidget {

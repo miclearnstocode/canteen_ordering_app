@@ -194,7 +194,7 @@ class HomeScreen extends StatelessWidget {
                             ),
                             const SizedBox(height: 6),
                             Text(
-                              'Amount: ₱' + amount.toStringAsFixed(2),
+                              'Amount: ₱${amount.toStringAsFixed(2)}',
                               style: GoogleFonts.poppins(
                                 fontSize: 13,
                                 fontWeight: FontWeight.w600,
