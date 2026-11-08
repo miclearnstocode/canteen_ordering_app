@@ -857,35 +857,35 @@ class _AdminPaymentsPageState extends State<AdminPaymentsPage> {
   /// 'all' | 'credit' | 'debit'
   String _selectedFilter = 'all';
 
-  // Cache: uid -> display name. Fetched lazily.
-  final Map<String, String> _nameCache = {};
-  final Set<String> _loadingNames = {};
+  DateTime _selectedDate = DateTime.now();
+  final _searchController = TextEditingController();
+  String _searchQuery = '';
 
-  String? _nameFor(String uid) {
-    if (uid.isEmpty) return 'Unknown';
-    if (_nameCache.containsKey(uid)) return _nameCache[uid];
-    if (!_loadingNames.contains(uid)) {
-      _loadingNames.add(uid);
-      _firestore.collection('users').doc(uid).get().then((doc) {
-        final data = doc.data();
-        final name = (data?['displayName'] ??
-                data?['username'] ??
-                'Unknown Student')
-            .toString();
-        if (!mounted) return;
-        setState(() {
-          _nameCache[uid] = name;
-          _loadingNames.remove(uid);
-        });
-      }).catchError((_) {
-        if (!mounted) return;
-        setState(() {
-          _nameCache[uid] = 'Unknown Student';
-          _loadingNames.remove(uid);
-        });
-      });
+  // Cache for user info (Name & Student ID)
+  final Map<String, Map<String, String>> _userCache = {};
+
+  @override
+  void dispose() {
+    _searchController.dispose();
+    super.dispose();
+  }
+
+  Future<Map<String, String>> _getUserInfo(String uid) async {
+    if (uid.isEmpty) return {'name': 'Unknown', 'id': '—'};
+    if (_userCache.containsKey(uid)) return _userCache[uid]!;
+
+    try {
+      final doc = await _firestore.collection('users').doc(uid).get();
+      final data = doc.data() ?? {};
+      final name = (data['displayName'] ?? data['username'] ?? 'Unknown Student').toString();
+      final studentId = (data['studentId'] ?? '—').toString();
+      
+      final info = {'name': name, 'id': studentId};
+      _userCache[uid] = info;
+      return info;
+    } catch (_) {
+      return {'name': 'Unknown Student', 'id': '—'};
     }
-    return null;
   }
 
   String _formatDateTime(DateTime? dt) {
@@ -898,7 +898,7 @@ class _AdminPaymentsPageState extends State<AdminPaymentsPage> {
     final h12 = local.hour % 12 == 0 ? 12 : local.hour % 12;
     final ampm = local.hour >= 12 ? 'PM' : 'AM';
     final min = local.minute.toString().padLeft(2, '0');
-    return '${months[local.month - 1]} ${local.day}, $h12:$min $ampm';
+    return '${months[local.month - 1]} ${local.day}, ${local.year}, $h12:$min $ampm';
   }
 
   String _formatTimeOnly(DateTime? dt) {
@@ -924,6 +924,26 @@ class _AdminPaymentsPageState extends State<AdminPaymentsPage> {
       'July', 'August', 'September', 'October', 'November', 'December'
     ];
     return '${months[dt.month - 1]} ${dt.day}, ${dt.year}';
+  }
+
+  Future<void> _pickDate() async {
+    final picked = await showDatePicker(
+      context: context,
+      initialDate: _selectedDate,
+      firstDate: DateTime(2023),
+      lastDate: DateTime.now(),
+      builder: (context, child) {
+        return Theme(
+          data: Theme.of(context).copyWith(
+            colorScheme: ColorScheme.light(primary: green),
+          ),
+          child: child!,
+        );
+      },
+    );
+    if (picked != null) {
+      setState(() => _selectedDate = picked);
+    }
   }
 
   @override
@@ -962,7 +982,7 @@ class _AdminPaymentsPageState extends State<AdminPaymentsPage> {
               child: StreamBuilder<QuerySnapshot>(
                 stream: _firestore
                     .collection('credit_transactions')
-                    .limit(300) // Fetch a wide range for grouping
+                    .limit(300) 
                     .snapshots(),
                 builder: (context, snapshot) {
                   if (snapshot.connectionState == ConnectionState.waiting) {
@@ -992,11 +1012,6 @@ class _AdminPaymentsPageState extends State<AdminPaymentsPage> {
                       return bT.compareTo(aT);
                     });
 
-                  // ── Apply overall filter ──
-                  final filtered = _selectedFilter == 'all'
-                      ? allTx
-                      : allTx.where((t) => t.type == _selectedFilter).toList();
-
                   // ── Daily Top-ups Math ──
                   final now = DateTime.now();
                   final todayStart = DateTime(now.year, now.month, now.day);
@@ -1012,6 +1027,18 @@ class _AdminPaymentsPageState extends State<AdminPaymentsPage> {
                     todayTopUpTotal += t.amount;
                   }
 
+                  // ── Daily Order Payments Math ──
+                  final todayOrders = allTx.where((t) {
+                    return t.type == 'debit' &&
+                        t.timestamp != null &&
+                        t.timestamp!.isAfter(todayStart);
+                  }).toList();
+
+                  double todayOrdersTotal = 0;
+                  for (final t in todayOrders) {
+                    todayOrdersTotal += t.amount;
+                  }
+
                   // ── All-time Totals ──
                   double totalTopUps = 0;
                   double totalSpent = 0;
@@ -1020,23 +1047,25 @@ class _AdminPaymentsPageState extends State<AdminPaymentsPage> {
                     if (t.type == 'debit') totalSpent += t.amount;
                   }
 
-                  // ── Grouping Logic ──
-                  final Map<String, List<_CreditTx>> groupedTx = {};
-                  for (final tx in filtered) {
-                    final dateStr = tx.timestamp != null 
-                        ? _formatDayHeader(tx.timestamp!) 
-                        : 'Unknown Date';
-                    if (!groupedTx.containsKey(dateStr)) {
-                      groupedTx[dateStr] = [];
+                  // ── Grouping Logic for DEBITS ──
+                  final Map<String, List<_CreditTx>> groupedDebits = {};
+                  if (_selectedFilter == 'all' || _selectedFilter == 'debit') {
+                    final debits = allTx.where((t) => t.type == 'debit').toList();
+                    for (final tx in debits) {
+                      final dateStr = tx.timestamp != null 
+                          ? _formatDayHeader(tx.timestamp!) 
+                          : 'Unknown Date';
+                      if (!groupedDebits.containsKey(dateStr)) {
+                        groupedDebits[dateStr] = [];
+                      }
+                      groupedDebits[dateStr]!.add(tx);
                     }
-                    groupedTx[dateStr]!.add(tx);
                   }
 
-                  // Create a flattened list of widgets to render inside CustomScrollView
                   final List<Widget> listWidgets = [];
                   
-                  groupedTx.forEach((dateHeader, txs) {
-                    // Date Header
+                  // Render Debits (Grouped Cards)
+                  groupedDebits.forEach((dateHeader, txs) {
                     listWidgets.add(
                       Padding(
                         padding: const EdgeInsets.only(top: 16, bottom: 8, left: 4),
@@ -1051,7 +1080,6 @@ class _AdminPaymentsPageState extends State<AdminPaymentsPage> {
                       ),
                     );
                     
-                    // Transactions for this date
                     listWidgets.add(
                       Container(
                         decoration: BoxDecoration(
@@ -1066,85 +1094,7 @@ class _AdminPaymentsPageState extends State<AdminPaymentsPage> {
                           separatorBuilder: (_, __) => Divider(color: Colors.grey.shade100, height: 1),
                           itemBuilder: (context, i) {
                             final tx = txs[i];
-                            final isCredit = tx.type == 'credit';
-                            final color = isCredit ? green : debitColor;
-                            final icon = isCredit ? Icons.add_card : Icons.shopping_bag_outlined;
-                            final label = isCredit ? 'Credit Top-up' : 'Order Payment';
-                            final sign = isCredit ? '+' : '-';
-                            final cachedName = _nameFor(tx.uid);
-
-                            return ListTile(
-                              contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                              leading: Container(
-                                padding: const EdgeInsets.all(10),
-                                decoration: BoxDecoration(
-                                  color: color.withValues(alpha: 0.1),
-                                  borderRadius: BorderRadius.circular(10),
-                                ),
-                                child: Icon(icon, color: color, size: 20),
-                              ),
-                              title: Row(
-                                children: [
-                                  Expanded(
-                                    child: Text(
-                                      cachedName ?? 'Loading…',
-                                      style: GoogleFonts.poppins(
-                                        fontWeight: FontWeight.w600,
-                                        fontSize: 14,
-                                        color: cachedName == null ? Colors.grey.shade500 : Colors.black87,
-                                      ),
-                                      overflow: TextOverflow.ellipsis,
-                                    ),
-                                  ),
-                                  Container(
-                                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-                                    decoration: BoxDecoration(
-                                      color: color.withValues(alpha: 0.12),
-                                      borderRadius: BorderRadius.circular(6),
-                                    ),
-                                    child: Text(
-                                      label,
-                                      style: GoogleFonts.poppins(
-                                        fontSize: 10,
-                                        fontWeight: FontWeight.bold,
-                                        color: color,
-                                      ),
-                                    ),
-                                  ),
-                                ],
-                              ),
-                              subtitle: Padding(
-                                padding: const EdgeInsets.only(top: 4),
-                                child: Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
-                                    Text(
-                                      tx.note.isEmpty
-                                          ? _formatTimeOnly(tx.timestamp)
-                                          : '${tx.note}  •  ${_formatTimeOnly(tx.timestamp)}',
-                                      style: GoogleFonts.poppins(
-                                          fontSize: 12, color: Colors.grey.shade600),
-                                      maxLines: 2,
-                                      overflow: TextOverflow.ellipsis,
-                                    ),
-                                    const SizedBox(height: 2),
-                                    Text(
-                                      'Balance after: ₱${tx.balanceAfter.toStringAsFixed(2)}',
-                                      style: GoogleFonts.poppins(
-                                          fontSize: 11, color: Colors.grey.shade500),
-                                    ),
-                                  ],
-                                ),
-                              ),
-                              trailing: Text(
-                                '$sign₱${tx.amount.toStringAsFixed(2)}',
-                                style: GoogleFonts.poppins(
-                                  fontWeight: FontWeight.w700,
-                                  fontSize: 15,
-                                  color: color,
-                                ),
-                              ),
-                            );
+                            return _buildCardItem(tx);
                           },
                         ),
                       ),
@@ -1153,197 +1103,329 @@ class _AdminPaymentsPageState extends State<AdminPaymentsPage> {
 
                   return CustomScrollView(
                     slivers: [
-                      // ═══════════════════════════════════════════
-                      // DAILY SUMMARY SECTION
-                      // ═══════════════════════════════════════════
                       SliverToBoxAdapter(
                         child: Column(
                           children: [
-                            Container(
-                              padding: const EdgeInsets.all(16),
-                              decoration: BoxDecoration(
-                                gradient: LinearGradient(
-                                  colors: [green.withValues(alpha: 0.08), green.withValues(alpha: 0.02)],
-                                  begin: Alignment.topLeft,
-                                  end: Alignment.bottomRight,
+                            // ═══════════════════════════════════════════
+                            // TOP-UP SUMMARY SECTION
+                            // ═══════════════════════════════════════════
+                            if (_selectedFilter == 'all' || _selectedFilter == 'credit') ...[
+                              Container(
+                                padding: const EdgeInsets.all(16),
+                                decoration: BoxDecoration(
+                                  gradient: LinearGradient(
+                                    colors: [green.withValues(alpha: 0.08), green.withValues(alpha: 0.02)],
+                                    begin: Alignment.topLeft,
+                                    end: Alignment.bottomRight,
+                                  ),
+                                  borderRadius: BorderRadius.circular(18),
+                                  border: Border.all(color: green.withValues(alpha: 0.25)),
                                 ),
-                                borderRadius: BorderRadius.circular(18),
-                                border: Border.all(color: green.withValues(alpha: 0.25)),
-                              ),
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  Row(
-                                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                                    children: [
-                                      Row(
-                                        children: [
-                                          Container(
-                                            padding: const EdgeInsets.all(8),
-                                            decoration: BoxDecoration(
-                                              color: green.withValues(alpha: 0.15),
-                                              borderRadius: BorderRadius.circular(10),
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Row(
+                                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                      children: [
+                                        Row(
+                                          children: [
+                                            Container(
+                                              padding: const EdgeInsets.all(8),
+                                              decoration: BoxDecoration(
+                                                color: green.withValues(alpha: 0.15),
+                                                borderRadius: BorderRadius.circular(10),
+                                              ),
+                                              child: Icon(Icons.trending_up_rounded, color: green, size: 20),
                                             ),
-                                            child: Icon(Icons.trending_up_rounded, color: green, size: 20),
+                                            const SizedBox(width: 12),
+                                            Column(
+                                              crossAxisAlignment: CrossAxisAlignment.start,
+                                              children: [
+                                                Text(
+                                                  "Today's Credit Top-ups",
+                                                  style: GoogleFonts.poppins(
+                                                    fontSize: 14,
+                                                    fontWeight: FontWeight.w700,
+                                                    color: Colors.grey.shade800,
+                                                  ),
+                                                ),
+                                                Text(
+                                                  '${todayTopUps.length} transactions',
+                                                  style: GoogleFonts.poppins(
+                                                    fontSize: 11,
+                                                    color: Colors.grey.shade600,
+                                                  ),
+                                                ),
+                                              ],
+                                            ),
+                                          ],
+                                        ),
+                                        Text(
+                                          '₱${todayTopUpTotal.toStringAsFixed(2)}',
+                                          style: GoogleFonts.poppins(
+                                            fontSize: 22,
+                                            fontWeight: FontWeight.w800,
+                                            color: green,
                                           ),
-                                          const SizedBox(width: 12),
-                                          Column(
-                                            crossAxisAlignment: CrossAxisAlignment.start,
+                                        ),
+                                      ],
+                                    ),
+                                    if (todayTopUps.isNotEmpty) ...[
+                                      const SizedBox(height: 12),
+                                      const Divider(height: 1),
+                                      const SizedBox(height: 8),
+                                      ...todayTopUps.take(3).map((tx) {
+                                        final name = _userCache[tx.uid]?['name'] ?? 'Loading…';
+                                        return Padding(
+                                          padding: const EdgeInsets.only(bottom: 6.0),
+                                          child: Row(
                                             children: [
-                                              Text(
-                                                "Today's Credit Top-ups",
-                                                style: GoogleFonts.poppins(
-                                                  fontSize: 14,
-                                                  fontWeight: FontWeight.w700,
-                                                  color: Colors.grey.shade800,
+                                              Icon(Icons.person_outline, size: 14, color: Colors.grey.shade500),
+                                              const SizedBox(width: 6),
+                                              Expanded(
+                                                child: Text(
+                                                  name,
+                                                  style: GoogleFonts.poppins(
+                                                    fontSize: 12,
+                                                    color: Colors.grey.shade700,
+                                                    fontWeight: FontWeight.w500,
+                                                  ),
+                                                  overflow: TextOverflow.ellipsis,
                                                 ),
                                               ),
                                               Text(
-                                                '${todayTopUps.length} transactions',
+                                                _formatTimeOnly(tx.timestamp),
                                                 style: GoogleFonts.poppins(
                                                   fontSize: 11,
-                                                  color: Colors.grey.shade600,
+                                                  color: Colors.grey.shade500,
+                                                ),
+                                              ),
+                                              const SizedBox(width: 12),
+                                              Text(
+                                                '+₱${tx.amount.toStringAsFixed(2)}',
+                                                style: GoogleFonts.poppins(
+                                                  fontSize: 12,
+                                                  fontWeight: FontWeight.w600,
+                                                  color: green,
                                                 ),
                                               ),
                                             ],
                                           ),
-                                        ],
-                                      ),
+                                        );
+                                      }),
+                                    ] else ...[
+                                      const SizedBox(height: 8),
                                       Text(
-                                        '₱${todayTopUpTotal.toStringAsFixed(2)}',
+                                        'No top-ups recorded yet today.',
                                         style: GoogleFonts.poppins(
-                                          fontSize: 22,
-                                          fontWeight: FontWeight.w800,
-                                          color: green,
+                                          fontSize: 12,
+                                          color: Colors.grey.shade500,
+                                          fontStyle: FontStyle.italic,
                                         ),
                                       ),
                                     ],
+                                  ],
+                                ),
+                              ),
+                              const SizedBox(height: 16),
+
+                              // All-Time Summary strip
+                              LayoutBuilder(
+                                builder: (context, constraints) {
+                                  final wide = constraints.maxWidth >= 600;
+                                  final w = wide ? (constraints.maxWidth - 16) / 2 : constraints.maxWidth;
+                                  return Wrap(
+                                    spacing: 16,
+                                    runSpacing: 12,
+                                    children: [
+                                      SizedBox(
+                                        width: w,
+                                        child: _summaryCard(
+                                          label: 'All-Time Top-ups',
+                                          amount: totalTopUps,
+                                          icon: Icons.south_west,
+                                          color: green,
+                                        ),
+                                      ),
+                                      // Only show "Spent on Orders" if we are on the "All" tab
+                                      if (_selectedFilter == 'all')
+                                        SizedBox(
+                                          width: w,
+                                          child: _summaryCard(
+                                            label: 'All-Time Spent on Orders',
+                                            amount: totalSpent,
+                                            icon: Icons.north_east,
+                                            color: debitColor,
+                                          ),
+                                        ),
+                                    ],
+                                  );
+                                },
+                              ),
+                              const SizedBox(height: 24),
+                            ],
+
+                            // ═══════════════════════════════════════════
+                            // ORDER PAYMENT SUMMARY SECTION
+                            // ═══════════════════════════════════════════
+                            if (_selectedFilter == 'debit') ...[
+                              Container(
+                                padding: const EdgeInsets.all(16),
+                                decoration: BoxDecoration(
+                                  gradient: LinearGradient(
+                                    colors: [debitColor.withValues(alpha: 0.08), debitColor.withValues(alpha: 0.02)],
+                                    begin: Alignment.topLeft,
+                                    end: Alignment.bottomRight,
                                   ),
-                                  if (todayTopUps.isNotEmpty) ...[
-                                    const SizedBox(height: 12),
-                                    const Divider(height: 1),
-                                    const SizedBox(height: 8),
-                                    ...todayTopUps.take(3).map((tx) {
-                                      final name = _nameFor(tx.uid) ?? 'Loading…';
-                                      return Padding(
-                                        padding: const EdgeInsets.only(bottom: 6.0),
-                                        child: Row(
+                                  borderRadius: BorderRadius.circular(18),
+                                  border: Border.all(color: debitColor.withValues(alpha: 0.25)),
+                                ),
+                                child: Row(
+                                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                  children: [
+                                    Row(
+                                      children: [
+                                        Container(
+                                          padding: const EdgeInsets.all(8),
+                                          decoration: BoxDecoration(
+                                            color: debitColor.withValues(alpha: 0.15),
+                                            borderRadius: BorderRadius.circular(10),
+                                          ),
+                                          child: Icon(Icons.shopping_bag_outlined, color: debitColor, size: 20),
+                                        ),
+                                        const SizedBox(width: 12),
+                                        Column(
+                                          crossAxisAlignment: CrossAxisAlignment.start,
                                           children: [
-                                            Icon(Icons.person_outline, size: 14, color: Colors.grey.shade500),
-                                            const SizedBox(width: 6),
-                                            Expanded(
-                                              child: Text(
-                                                name,
-                                                style: GoogleFonts.poppins(
-                                                  fontSize: 12,
-                                                  color: Colors.grey.shade700,
-                                                  fontWeight: FontWeight.w500,
-                                                ),
-                                                overflow: TextOverflow.ellipsis,
+                                            Text(
+                                              "Today's Order Payments",
+                                              style: GoogleFonts.poppins(
+                                                fontSize: 14,
+                                                fontWeight: FontWeight.w700,
+                                                color: Colors.grey.shade800,
                                               ),
                                             ),
                                             Text(
-                                              _formatTimeOnly(tx.timestamp),
+                                              '${todayOrders.length} transactions',
                                               style: GoogleFonts.poppins(
                                                 fontSize: 11,
-                                                color: Colors.grey.shade500,
-                                              ),
-                                            ),
-                                            const SizedBox(width: 12),
-                                            Text(
-                                              '+₱${tx.amount.toStringAsFixed(2)}',
-                                              style: GoogleFonts.poppins(
-                                                fontSize: 12,
-                                                fontWeight: FontWeight.w600,
-                                                color: green,
+                                                color: Colors.grey.shade600,
                                               ),
                                             ),
                                           ],
                                         ),
-                                      );
-                                    }),
-                                    if (todayTopUps.length > 3)
-                                      Padding(
-                                        padding: const EdgeInsets.only(top: 4),
-                                        child: Text(
-                                          '+ ${todayTopUps.length - 3} more today',
-                                          style: GoogleFonts.poppins(
-                                            fontSize: 10,
-                                            color: Colors.grey.shade500,
-                                            fontStyle: FontStyle.italic,
-                                          ),
-                                        ),
-                                      ),
-                                  ] else ...[
-                                    const SizedBox(height: 8),
+                                      ],
+                                    ),
                                     Text(
-                                      'No top-ups recorded yet today.',
+                                      '₱${todayOrdersTotal.toStringAsFixed(2)}',
                                       style: GoogleFonts.poppins(
-                                        fontSize: 12,
-                                        color: Colors.grey.shade500,
-                                        fontStyle: FontStyle.italic,
-                                      ),
-                                    ),
-                                  ],
-                                ],
-                              ),
-                            ),
-                            const SizedBox(height: 16),
-
-                            // ── Overall Summary strip ──
-                            LayoutBuilder(
-                              builder: (context, constraints) {
-                                final wide = constraints.maxWidth >= 600;
-                                final w = wide ? (constraints.maxWidth - 16) / 2 : constraints.maxWidth;
-                                return Wrap(
-                                  spacing: 16,
-                                  runSpacing: 12,
-                                  children: [
-                                    SizedBox(
-                                      width: w,
-                                      child: _summaryCard(
-                                        label: 'All-Time Top-ups',
-                                        amount: totalTopUps,
-                                        icon: Icons.south_west,
-                                        color: green,
-                                      ),
-                                    ),
-                                    SizedBox(
-                                      width: w,
-                                      child: _summaryCard(
-                                        label: 'All-Time Spent on Orders',
-                                        amount: totalSpent,
-                                        icon: Icons.north_east,
+                                        fontSize: 22,
+                                        fontWeight: FontWeight.w800,
                                         color: debitColor,
                                       ),
                                     ),
                                   ],
-                                );
-                              },
-                            ),
-                            const SizedBox(height: 8),
+                                ),
+                              ),
+                              const SizedBox(height: 16),
+
+                              // All-Time Order Payments KPI
+                              _summaryCard(
+                                label: 'All-Time Spent on Orders',
+                                amount: totalSpent,
+                                icon: Icons.north_east,
+                                color: debitColor,
+                              ),
+                              const SizedBox(height: 24),
+                            ],
+                            
+                            // ═══════════════════════════════════════════
+                            // TABLE SECTION (Only visible for All / Top-ups)
+                            // ═══════════════════════════════════════════
+                            if (_selectedFilter == 'all' || _selectedFilter == 'credit') ...[
+                              Text(
+                                'Top-Up Records',
+                                style: GoogleFonts.poppins(
+                                    fontSize: 16, fontWeight: FontWeight.w700),
+                              ),
+                              const SizedBox(height: 12),
+                              Row(
+                                children: [
+                                  // Date Picker
+                                  InkWell(
+                                    onTap: _pickDate,
+                                    borderRadius: BorderRadius.circular(8),
+                                    child: Container(
+                                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                                      decoration: BoxDecoration(
+                                        color: Colors.white,
+                                        borderRadius: BorderRadius.circular(8),
+                                        border: Border.all(color: Colors.grey.shade300),
+                                      ),
+                                      child: Row(
+                                        mainAxisSize: MainAxisSize.min,
+                                        children: [
+                                          Icon(Icons.calendar_today_outlined, size: 16, color: green),
+                                          const SizedBox(width: 8),
+                                          Text(
+                                            _formatDayHeader(_selectedDate),
+                                            style: GoogleFonts.poppins(
+                                              fontSize: 12,
+                                              fontWeight: FontWeight.w500,
+                                              color: Colors.black87,
+                                            ),
+                                          ),
+                                          const SizedBox(width: 8),
+                                          Icon(Icons.keyboard_arrow_down, size: 16, color: Colors.grey.shade600),
+                                        ],
+                                      ),
+                                    ),
+                                  ),
+                                  const SizedBox(width: 12),
+                                  // Search Bar
+                                  Expanded(
+                                    child: TextField(
+                                      controller: _searchController,
+                                      onChanged: (val) => setState(() => _searchQuery = val.toLowerCase()),
+                                      decoration: InputDecoration(
+                                        hintText: 'Search student name or ID...',
+                                        hintStyle: GoogleFonts.poppins(fontSize: 12),
+                                        prefixIcon: const Icon(Icons.search, size: 18),
+                                        filled: true,
+                                        fillColor: Colors.white,
+                                        contentPadding: const EdgeInsets.symmetric(vertical: 0),
+                                        border: OutlineInputBorder(
+                                          borderRadius: BorderRadius.circular(8),
+                                          borderSide: BorderSide(color: Colors.grey.shade300),
+                                        ),
+                                        enabledBorder: OutlineInputBorder(
+                                          borderRadius: BorderRadius.circular(8),
+                                          borderSide: BorderSide(color: Colors.grey.shade300),
+                                        ),
+                                      ),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                              const SizedBox(height: 16),
+                              _buildTopUpTable(allTx, todayTopUps),
+                              const SizedBox(height: 24),
+                            ],
+
+                            // ═══════════════════════════════════════════
+                            // EMPTY DEBIT CARDS STATE
+                            // ═══════════════════════════════════════════
+                            if (_selectedFilter == 'debit' && groupedDebits.isEmpty)
+                              Padding(
+                                padding: const EdgeInsets.all(32),
+                                child: Text('No order payments found', style: GoogleFonts.poppins(color: Colors.grey.shade600)),
+                              ),
                           ],
                         ),
                       ),
 
-                      // ═══════════════════════════════════════════
-                      // GROUPED TRANSACTIONS LIST
-                      // ═══════════════════════════════════════════
-                      if (filtered.isEmpty)
-                        SliverFillRemaining(
-                          hasScrollBody: false,
-                          child: Center(
-                            child: Column(
-                              mainAxisAlignment: MainAxisAlignment.center,
-                              children: [
-                                Icon(Icons.receipt_long_outlined, size: 60, color: Colors.grey.shade400),
-                                const SizedBox(height: 12),
-                                Text('No transactions found', style: GoogleFonts.poppins(color: Colors.grey.shade600)),
-                              ],
-                            ),
-                          ),
-                        )
-                      else
+                      // Render the Debits grouping
+                      if (listWidgets.isNotEmpty)
                         SliverPadding(
                           padding: const EdgeInsets.only(bottom: 40),
                           sliver: SliverList(
@@ -1358,6 +1440,276 @@ class _AdminPaymentsPageState extends State<AdminPaymentsPage> {
           ],
         ),
       ),
+    );
+  }
+
+  // ── Top-Up Table Builder ──
+  Widget _buildTopUpTable(List<_CreditTx> allTx, List<_CreditTx> todayTx) {
+    // Filter Top-ups by the selected Date Picker
+    final selectedDateTx = allTx.where((tx) {
+      if (tx.type != 'credit' || tx.timestamp == null) return false;
+      return tx.timestamp!.year == _selectedDate.year &&
+             tx.timestamp!.month == _selectedDate.month &&
+             tx.timestamp!.day == _selectedDate.day;
+    }).toList();
+
+    return FutureBuilder<List<_TableRowData>>(
+      future: Future.wait(
+        selectedDateTx.map((tx) async {
+          final info = await _getUserInfo(tx.uid);
+          return _TableRowData(tx: tx, name: info['name']!, studentId: info['id']!);
+        }),
+      ),
+      builder: (context, asyncSnapshot) {
+        if (!asyncSnapshot.hasData) {
+          return const Center(child: Padding(padding: EdgeInsets.all(20), child: CircularProgressIndicator()));
+        }
+
+        var rows = asyncSnapshot.data!;
+        
+        if (_searchQuery.isNotEmpty) {
+          rows = rows.where((r) {
+            return r.name.toLowerCase().contains(_searchQuery) ||
+                   r.studentId.toLowerCase().contains(_searchQuery);
+          }).toList();
+        }
+
+        double dailyTotal = 0;
+        for (var r in rows) {
+          dailyTotal += r.tx.amount;
+        }
+
+        return Container(
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(8),
+            border: Border.all(color: Colors.grey.shade300),
+          ),
+          child: Column(
+            children: [
+              // Table Header (Green)
+              Container(
+                decoration: BoxDecoration(
+                  color: green,
+                  borderRadius: const BorderRadius.vertical(top: Radius.circular(7)),
+                ),
+                padding: const EdgeInsets.symmetric(vertical: 12),
+                child: Row(
+                  children: [
+                    _headerCell('#', flex: 1),
+                    _headerCell('Student ID', flex: 2),
+                    _headerCell('Student Name', flex: 3),
+                    _headerCell('Top-Up Amount', flex: 2, alignRight: true),
+                    _headerCell('Date & Time', flex: 2, alignRight: true),
+                  ],
+                ),
+              ),
+              
+              // Table Body
+              if (rows.isEmpty)
+                Padding(
+                  padding: const EdgeInsets.all(32),
+                  child: Text('No top-ups found for this date.',
+                      style: GoogleFonts.poppins(color: Colors.grey.shade500)),
+                )
+              else
+                ListView.separated(
+                  shrinkWrap: true,
+                  physics: const NeverScrollableScrollPhysics(),
+                  itemCount: rows.length,
+                  separatorBuilder: (_, __) => Divider(height: 1, color: Colors.grey.shade200),
+                  itemBuilder: (context, index) {
+                    final row = rows[index];
+                    final isEven = index % 2 == 0;
+                    return Container(
+                      color: isEven ? Colors.white : const Color(0xFFF8F9FA),
+                      padding: const EdgeInsets.symmetric(vertical: 14),
+                      child: Row(
+                        children: [
+                          _dataCell('${index + 1}', flex: 1),
+                          _dataCell(row.studentId, flex: 2),
+                          _dataCell(row.name, flex: 3),
+                          _dataCell('₱${row.tx.amount.toStringAsFixed(2)}', flex: 2, alignRight: true),
+                          _dataCell(_formatDateTime(row.tx.timestamp), flex: 2, alignRight: true),
+                        ],
+                      ),
+                    );
+                  },
+                ),
+
+              // Table Footer (Daily Total) (Green)
+              if (rows.isNotEmpty)
+                Container(
+                  decoration: BoxDecoration(
+                    color: green.withValues(alpha: 0.1),
+                    borderRadius: const BorderRadius.vertical(bottom: Radius.circular(7)),
+                  ),
+                  padding: const EdgeInsets.symmetric(vertical: 16),
+                  child: Row(
+                    children: [
+                      Expanded(
+                        flex: 6,
+                        child: Padding(
+                          padding: const EdgeInsets.only(left: 16),
+                          child: Text(
+                            'Daily Total',
+                            style: GoogleFonts.poppins(
+                              fontWeight: FontWeight.w700,
+                              fontSize: 15,
+                              color: green,
+                            ),
+                          ),
+                        ),
+                      ),
+                      Expanded(
+                        flex: 2,
+                        child: Padding(
+                          padding: const EdgeInsets.only(right: 16),
+                          child: Text(
+                            '₱${dailyTotal.toStringAsFixed(2)}',
+                            textAlign: TextAlign.right,
+                            style: GoogleFonts.poppins(
+                              fontWeight: FontWeight.w700,
+                              fontSize: 16,
+                              color: green,
+                            ),
+                          ),
+                        ),
+                      ),
+                      const Spacer(flex: 2),
+                    ],
+                  ),
+                ),
+            ],
+          ),
+        );
+      }
+    );
+  }
+
+  // ── Helpers for Table Cells ──
+  Widget _headerCell(String text, {int flex = 1, bool alignRight = false}) {
+    return Expanded(
+      flex: flex,
+      child: Padding(
+        padding: EdgeInsets.only(left: alignRight ? 0 : 16, right: alignRight ? 16 : 0),
+        child: Text(
+          text,
+          textAlign: alignRight ? TextAlign.right : TextAlign.left,
+          style: GoogleFonts.poppins(
+            color: Colors.white,
+            fontWeight: FontWeight.w600,
+            fontSize: 13,
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _dataCell(String text, {int flex = 1, bool alignRight = false}) {
+    return Expanded(
+      flex: flex,
+      child: Padding(
+        padding: EdgeInsets.only(left: alignRight ? 0 : 16, right: alignRight ? 16 : 0),
+        child: Text(
+          text,
+          textAlign: alignRight ? TextAlign.right : TextAlign.left,
+          style: GoogleFonts.poppins(
+            color: Colors.black87,
+            fontSize: 13,
+          ),
+          overflow: TextOverflow.ellipsis,
+        ),
+      ),
+    );
+  }
+
+  // ── Standard Debit Card Item ──
+  Widget _buildCardItem(_CreditTx tx) {
+    final isCredit = tx.type == 'credit';
+    final color = isCredit ? green : debitColor;
+    final icon = isCredit ? Icons.add_card : Icons.shopping_bag_outlined;
+    final label = isCredit ? 'Credit Top-up' : 'Order Payment';
+    final sign = isCredit ? '+' : '-';
+
+    return FutureBuilder<Map<String, String>>(
+      future: _getUserInfo(tx.uid),
+      builder: (context, snapshot) {
+        final cachedName = snapshot.data?['name'];
+
+        return ListTile(
+          contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+          leading: Container(
+            padding: const EdgeInsets.all(10),
+            decoration: BoxDecoration(
+              color: color.withValues(alpha: 0.1),
+              borderRadius: BorderRadius.circular(10),
+            ),
+            child: Icon(icon, color: color, size: 20),
+          ),
+          title: Row(
+            children: [
+              Expanded(
+                child: Text(
+                  cachedName ?? 'Loading…',
+                  style: GoogleFonts.poppins(
+                    fontWeight: FontWeight.w600,
+                    fontSize: 14,
+                    color: cachedName == null ? Colors.grey.shade500 : Colors.black87,
+                  ),
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                decoration: BoxDecoration(
+                  color: color.withValues(alpha: 0.12),
+                  borderRadius: BorderRadius.circular(6),
+                ),
+                child: Text(
+                  label,
+                  style: GoogleFonts.poppins(
+                    fontSize: 10,
+                    fontWeight: FontWeight.bold,
+                    color: color,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          subtitle: Padding(
+            padding: const EdgeInsets.only(top: 4),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  tx.note.isEmpty
+                      ? _formatTimeOnly(tx.timestamp)
+                      : '${tx.note}  •  ${_formatTimeOnly(tx.timestamp)}',
+                  style: GoogleFonts.poppins(
+                      fontSize: 12, color: Colors.grey.shade600),
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  'Balance after: ₱${tx.balanceAfter.toStringAsFixed(2)}',
+                  style: GoogleFonts.poppins(
+                      fontSize: 11, color: Colors.grey.shade500),
+                ),
+              ],
+            ),
+          ),
+          trailing: Text(
+            '$sign₱${tx.amount.toStringAsFixed(2)}',
+            style: GoogleFonts.poppins(
+              fontWeight: FontWeight.w700,
+              fontSize: 15,
+              color: color,
+            ),
+          ),
+        );
+      }
     );
   }
 
@@ -1429,6 +1781,15 @@ class _AdminPaymentsPageState extends State<AdminPaymentsPage> {
       ),
     );
   }
+}
+
+// ── Helper class for Table Data ──
+class _TableRowData {
+  final _CreditTx tx;
+  final String name;
+  final String studentId;
+
+  _TableRowData({required this.tx, required this.name, required this.studentId});
 }
 
 // ---------- Internal model ----------
